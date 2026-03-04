@@ -1,0 +1,31 @@
+[package]
+name = "oci-client-nodejs-bindings"
+version = "0.17.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Node.js bindings for rust-oci-client"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = ["native-tls"]
+native-tls = ["oci-client/native-tls"]
+# Vendored OpenSSL for cross-compiled Linux targets where system OpenSSL isn't available
+native-tls-vendored = ["oci-client/native-tls", "openssl/vendored"]
+
+[dependencies]
+napi = { version = "3", default-features = false, features = ["async", "napi4", "tokio_rt"] }
+napi-derive = "3"
+
+oci-client = { version = "0.17", default-features = false }
+
+oci-spec = "0.9"
+
+tokio = { version = "1", features = ["full"] }
+
+
+openssl = { version = "0.10", optional = true }
+
+[build-dependencies]
+napi-build = "2"
