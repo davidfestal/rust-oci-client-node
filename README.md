@@ -170,6 +170,9 @@ Fetch a manifest's digest without downloading the full manifest content. Returns
 #### `storeAuth(registry, auth)`
 Pre-authenticate with a registry. Useful for storing credentials before performing multiple operations.
 
+#### `close()`
+Explicitly release the underlying connection pool. Idempotent — returns `true` on first call, `false` on subsequent calls. After `close()`, all method calls will throw `"Client is closed"`.
+
 ### Types
 
 See the TypeScript definitions for complete type information.
