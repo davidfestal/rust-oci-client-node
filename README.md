@@ -214,6 +214,8 @@ yarn lint
 - Linux ARM64 (glibc)
 - Linux x64 (musl/Alpine)
 - Linux ARM64 (musl/Alpine)
+- Linux s390x (glibc)
+- Linux ppc64le (glibc)
 
 ## Contributing
 
