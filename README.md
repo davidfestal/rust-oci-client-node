@@ -219,7 +219,7 @@ yarn lint
 
 ## Contributing
 
-See the [CONTRIBUTING.md](../../CONTRIBUTING.md) file in the repository root for contribution guidelines.
+See the [CONTRIBUTING.md](./CONTRIBUTING.md) file for contribution guidelines.
 
 ## License
 
