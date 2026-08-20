@@ -205,6 +205,22 @@ yarn test
 yarn lint
 ```
 
+## TLS
+
+These bindings default to the **`native-tls`** backend (OpenSSL on Linux, Secure Transport on macOS,
+SChannel on Windows), unlike the parent `oci-client` crate which defaults to `rustls-tls`. The
+reason is cross-compilation: the prebuilt binaries cover nine target triples including musl and
+s390x, and `native-tls` with vendored OpenSSL (`native-tls-vendored` feature) produces
+self-contained binaries on all of them without requiring a system Rust toolchain or OpenSSL headers
+at runtime.
+
+If you build from source and prefer a pure-Rust TLS stack, you can enable the `rustls-tls` feature
+instead:
+
+```bash
+yarn napi build --platform --release --no-default-features --features rustls-tls
+```
+
 ## Supported Platforms
 
 - Windows x64 (MSVC)

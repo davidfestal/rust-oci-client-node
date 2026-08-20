@@ -170,7 +170,11 @@ pub struct ClientConfig {
     pub protocol: Option<ClientProtocol>,
     /// List of registries to exclude from HTTPS (used with HttpsExcept protocol)
     pub https_except_registries: Option<Vec<String>>,
-    /// Accept invalid certificates (default: false)
+    /// **DANGER**: Accept invalid TLS certificates (default: false).
+    /// Setting this to `true` disables all certificate verification, making
+    /// connections vulnerable to man-in-the-middle attacks. Only use for
+    /// local development or testing with self-signed certificates.
+    /// Prefer `extraRootCertificates` for production self-signed setups.
     pub accept_invalid_certificates: Option<bool>,
     /// Use monolithic push for pushing blobs (default: false)
     pub use_monolithic_push: Option<bool>,

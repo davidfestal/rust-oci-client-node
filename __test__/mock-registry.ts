@@ -150,10 +150,11 @@ async function generateTlsCerts(): Promise<TlsCerts> {
     {
       notAfterDate,
       keySize: 2048,
+      algorithm: 'sha256',
       extensions: [
         { name: 'subjectAltName', altNames: [{ type: 7, ip: '127.0.0.1' }, { type: 2, value: 'localhost' }] },
         { name: 'extKeyUsage', serverAuth: true },
-        { name: 'basicConstraints', cA: true },
+        { name: 'basicConstraints', cA: false },
       ],
     },
   )
