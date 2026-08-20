@@ -16,10 +16,12 @@ use oci_client::manifest::{
     ImageIndexEntry, OciDescriptor, OciImageIndex, OciImageManifest, OciManifest, Platform,
 };
 use oci_client::secrets::RegistryAuth as NativeRegistryAuth;
+use oci_client::errors::OciDistributionError;
 use oci_client::{Client, Reference};
 use oci_spec::image::{Arch, Os};
 
 use std::collections::BTreeMap;
+use std::convert::TryFrom;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -745,11 +747,20 @@ impl OciClient {
     }
 
     /// Create a new OCI client with custom configuration.
+    ///
+    /// Throws if the configuration is invalid (e.g. malformed CA certificate,
+    /// bad proxy URL). This differs from the parent crate's `Client::new` which
+    /// silently falls back to defaults — in Node.js there is no `tracing`
+    /// subscriber to surface those warnings, so we fail explicitly instead.
     #[napi(factory)]
-    pub fn with_config(config: ClientConfig) -> Self {
-        OciClient {
-            inner: parking_lot::Mutex::new(Some(Client::new(config.to_native()))),
-        }
+    pub fn with_config(config: ClientConfig) -> Result<Self> {
+        let native_config = config.to_native();
+        let client = Client::try_from(native_config).map_err(|e: OciDistributionError| {
+            Error::from_reason(format!("Invalid client configuration: {}", e))
+        })?;
+        Ok(OciClient {
+            inner: parking_lot::Mutex::new(Some(client)),
+        })
     }
 
     /// Explicitly release the underlying connection pool.

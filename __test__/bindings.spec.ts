@@ -169,24 +169,15 @@ test('OciClient.withConfig - should create client with all settings combined', (
   t.truthy(client)
 })
 
-test('OciClient.withConfig - should create client with custom certificates', (t) => {
-  const dummyCertPem = Buffer.from(`-----BEGIN CERTIFICATE-----
-MIIBkTCB+wIJAKHBfpB+dEzxMA0GCSqGSIb3DQEBCwUAMBExDzANBgNVBAMMBnVu
-dXNlZDAeFw0yNDAxMDEwMDAwMDBaFw0yNTAxMDEwMDAwMDBaMBExDzANBgNVBAMM
-BnVudXNlZDBcMA0GCSqGSIb3DQEBAQUAA0sAMEgCQQC5mG0lCDMvz/n9WQH7dlfN
-zQkFqW9sMSqvX9qPxN1LmQE7fv/9k1p7q8VDqy6RhDz1f9nNqvHXX1XqHqXJKJBp
-AgMBAAGjUzBRMB0GA1UdDgQWBBQJ7W7lXPqXtdJ9gJ8cKo9E7VtZyjAfBgNVHSME
-GDAWgBQJ7W7lXPqXtdJ9gJ8cKo9E7VtZyjAPBgNVHRMBAf8EBTADAQH/MA0GCSqG
-SIb3DQEBCwUAA0EAG9NxyMEKYE8fzhzLgDz7MQMP3XL7kDqPqRnvJQGLNJQrvSj5
-5M/hDp3eXrWzLgJPqPcC1H3B9cCNqLz8NB/32g==
------END CERTIFICATE-----`)
+test('OciClient.withConfig - should create client with custom certificates', async (t) => {
+  const tlsCerts = await generateTlsCerts()
 
   const config: ClientConfig = {
     protocol: ClientProtocol.Https,
     extraRootCertificates: [
       {
         encoding: CertificateEncoding.Pem,
-        data: dummyCertPem,
+        data: tlsCerts.caCert,
       },
     ],
   }
@@ -194,29 +185,36 @@ SIb3DQEBCwUAA0EAG9NxyMEKYE8fzhzLgDz7MQMP3XL7kDqPqRnvJQGLNJQrvSj5
   t.truthy(client)
 })
 
-test('OciClient.withConfig - should create client with tlsCertsOnly', (t) => {
-  const dummyCertPem = Buffer.from(`-----BEGIN CERTIFICATE-----
-MIIBkTCB+wIJAKHBfpB+dEzxMA0GCSqGSIb3DQEBCwUAMBExDzANBgNVBAMMBnVu
-dXNlZDAeFw0yNDAxMDEwMDAwMDBaFw0yNTAxMDEwMDAwMDBaMBExDzANBgNVBAMM
-BnVudXNlZDBcMA0GCSqGSIb3DQEBAQUAA0sAMEgCQQC5mG0lCDMvz/n9WQH7dlfN
-zQkFqW9sMSqvX9qPxN1LmQE7fv/9k1p7q8VDqy6RhDz1f9nNqvHXX1XqHqXJKJBp
-AgMBAAGjUzBRMB0GA1UdDgQWBBQJ7W7lXPqXtdJ9gJ8cKo9E7VtZyjAfBgNVHSME
-GDAWgBQJ7W7lXPqXtdJ9gJ8cKo9E7VtZyjAPBgNVHRMBAf8EBTADAQH/MA0GCSqG
-SIb3DQEBCwUAA0EAG9NxyMEKYE8fzhzLgDz7MQMP3XL7kDqPqRnvJQGLNJQrvSj5
-5M/hDp3eXrWzLgJPqPcC1H3B9cCNqLz8NB/32g==
------END CERTIFICATE-----`)
+test('OciClient.withConfig - should create client with tlsCertsOnly', async (t) => {
+  const tlsCerts = await generateTlsCerts()
 
   const config: ClientConfig = {
     protocol: ClientProtocol.Https,
     tlsCertsOnly: [
       {
         encoding: CertificateEncoding.Pem,
-        data: dummyCertPem,
+        data: tlsCerts.caCert,
       },
     ],
   }
   const client = OciClient.withConfig(config)
   t.truthy(client)
+})
+
+test('OciClient.withConfig - should throw on invalid certificate data', (t) => {
+  const err = t.throws(() =>
+    OciClient.withConfig({
+      protocol: ClientProtocol.Https,
+      tlsCertsOnly: [
+        {
+          encoding: CertificateEncoding.Pem,
+          data: Buffer.from('this is not a valid PEM certificate'),
+        },
+      ],
+    })
+  )
+  t.truthy(err)
+  t.true(err!.message.includes('Invalid client configuration'))
 })
 
 // =============================================================================
