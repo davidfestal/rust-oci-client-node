@@ -4,6 +4,9 @@ version = "0.17.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Node.js bindings for rust-oci-client"
+repository = "https://github.com/oras-project/rust-oci-client-node"
+homepage = "https://github.com/oras-project/rust-oci-client-node"
+readme = "README.md"
 
 [lib]
 crate-type = ["cdylib"]

@@ -73,11 +73,15 @@
     "rust",
     "bindings"
   ],
-  "author": "dfestal@redhat.com",
+  "author": "The ORAS Authors",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/oras-project/rust-oci-client.git"
+    "url": "git+https://github.com/oras-project/rust-oci-client-node.git"
+  },
+  "homepage": "https://github.com/oras-project/rust-oci-client-node#readme",
+  "bugs": {
+    "url": "https://github.com/oras-project/rust-oci-client-node/issues"
   },
   "packageManager": "yarn@4.12.0"
 }
