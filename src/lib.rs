@@ -13,11 +13,11 @@ use oci_client::client::{
     Config as NativeConfig, ImageData as NativeImageData, ImageLayer as NativeImageLayer,
     PushResponse as NativePushResponse,
 };
+use oci_client::errors::OciDistributionError;
 use oci_client::manifest::{
     ImageIndexEntry, OciDescriptor, OciImageIndex, OciImageManifest, OciManifest, Platform,
 };
 use oci_client::secrets::RegistryAuth as NativeRegistryAuth;
-use oci_client::errors::OciDistributionError;
 use oci_client::{Client, Reference};
 use oci_spec::image::{Arch, Os};
 
@@ -733,6 +733,12 @@ pub struct PullManifestAndConfigAndListDigestResult {
 #[napi]
 pub struct OciClient {
     inner: parking_lot::Mutex<Option<Client>>,
+}
+
+impl Default for OciClient {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[napi]
