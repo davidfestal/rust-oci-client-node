@@ -10,7 +10,7 @@ import * as net from 'net'
 import { OciClient, ClientProtocol } from '../index.js'
 
 export const CONTAINER_NAME_PREFIX = 'oci-client-test-registry'
-export const ZOT_IMAGE = 'ghcr.io/project-zot/zot-minimal:latest'
+export const ZOT_IMAGE = 'ghcr.io/project-zot/zot-minimal@sha256:095d619a8860e0f9eee01dd53a58320f2f94e4aa1525e6ea75dddff3518f567f'
 
 // Port range for registry instances (use high ports to avoid conflicts)
 const PORT_RANGE_START = 15000

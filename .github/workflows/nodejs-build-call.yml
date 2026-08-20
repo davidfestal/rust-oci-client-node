@@ -4,6 +4,9 @@ on:
   workflow_call:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   DEBUG: napi:*
   APP_NAME: oci-client
@@ -27,7 +30,7 @@ jobs:
         run: corepack enable
 
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --immutable
 
       - name: Oxlint
         run: yarn lint
@@ -155,7 +158,7 @@ jobs:
           tool: cargo-zigbuild
 
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --immutable
 
       - name: Build
         run: ${{ matrix.settings.build }}
@@ -210,7 +213,7 @@ jobs:
         run: corepack enable
 
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --immutable
 
       - name: Download native binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # ratchet:actions/download-artifact@v8
@@ -248,7 +251,7 @@ jobs:
         run: corepack enable
 
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --immutable
 
       - name: Download native binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # ratchet:actions/download-artifact@v8
@@ -300,7 +303,7 @@ jobs:
         run: |
           yarn config set --json supportedArchitectures.cpu '["current", "arm64", "x64", "ppc64"]'
           yarn config set --json supportedArchitectures.libc '["current", "musl", "gnu"]'
-          yarn install
+          yarn install --immutable
 
       - name: Download native binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # ratchet:actions/download-artifact@v8
@@ -350,11 +353,33 @@ jobs:
         if: steps.cache-s390x-assets.outputs.cache-hit != 'true'
         run: |
           mkdir -p /tmp/ubuntu-s390x-assets
+
+          # Import Ubuntu Cloud Image signing key (UEC Image Automatic Signing Key <cdimage@ubuntu.com>)
+          UBUNTU_KEY="D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81"
+          gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys "$UBUNTU_KEY"
+
+          # Download kernel and initrd with GPG-verified checksums
           BASE_URL="https://cloud-images.ubuntu.com/releases/noble/release/unpacked"
+          curl -fsSL -o /tmp/ubuntu-s390x-assets/SHA256SUMS.unpacked "$BASE_URL/SHA256SUMS"
+          curl -fsSL -o /tmp/ubuntu-s390x-assets/SHA256SUMS.unpacked.gpg "$BASE_URL/SHA256SUMS.gpg"
+          gpg --verify /tmp/ubuntu-s390x-assets/SHA256SUMS.unpacked.gpg /tmp/ubuntu-s390x-assets/SHA256SUMS.unpacked
           curl -fsSL -o /tmp/ubuntu-s390x-assets/vmlinuz "$BASE_URL/ubuntu-24.04-server-cloudimg-s390x-vmlinuz-generic"
           curl -fsSL -o /tmp/ubuntu-s390x-assets/initrd.img "$BASE_URL/ubuntu-24.04-server-cloudimg-s390x-initrd-generic"
+          VMLINUZ_SHA=$(grep 's390x-vmlinuz-generic$' /tmp/ubuntu-s390x-assets/SHA256SUMS.unpacked | awk '{print $1}')
+          INITRD_SHA=$(grep 's390x-initrd-generic$' /tmp/ubuntu-s390x-assets/SHA256SUMS.unpacked | awk '{print $1}')
+          echo "${VMLINUZ_SHA}  /tmp/ubuntu-s390x-assets/vmlinuz" | sha256sum -c -
+          echo "${INITRD_SHA}  /tmp/ubuntu-s390x-assets/initrd.img" | sha256sum -c -
+
+          # Download rootfs with GPG-verified checksum
           ROOT_URL="https://cloud-images.ubuntu.com/releases/noble/release"
+          curl -fsSL -o /tmp/ubuntu-s390x-assets/SHA256SUMS "$ROOT_URL/SHA256SUMS"
+          curl -fsSL -o /tmp/ubuntu-s390x-assets/SHA256SUMS.gpg "$ROOT_URL/SHA256SUMS.gpg"
+          gpg --verify /tmp/ubuntu-s390x-assets/SHA256SUMS.gpg /tmp/ubuntu-s390x-assets/SHA256SUMS
           curl -fsSL -o /tmp/ubuntu-s390x-assets/root.tar.xz "$ROOT_URL/ubuntu-24.04-server-cloudimg-s390x-root.tar.xz"
+          ROOT_SHA=$(grep 's390x-root.tar.xz$' /tmp/ubuntu-s390x-assets/SHA256SUMS | awk '{print $1}')
+          echo "${ROOT_SHA}  /tmp/ubuntu-s390x-assets/root.tar.xz" | sha256sum -c -
+
+          # Download Node.js (pinned by checksum)
           NODE_VERSION=22.16.0
           NODE_SHA256=b3603dcbea7b1ef87cfd3bf986ff9697609359356d82334de6217838d3cce640
           curl -fsSL -o /tmp/ubuntu-s390x-assets/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-s390x.tar.xz"
@@ -371,7 +396,7 @@ jobs:
       - name: Install dependencies on host
         run: |
           yarn config set --json supportedArchitectures.cpu '["current", "s390x"]'
-          yarn install
+          yarn install --immutable
 
       - name: Download native binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # ratchet:actions/download-artifact@v8
@@ -394,27 +419,7 @@ jobs:
           sudo mkdir -p /tmp/rootfs/tmp/nodejs-test
           sudo cp -a . /tmp/rootfs/tmp/nodejs-test/
 
-          # VM init script (PID 1): mounts, runs tests, signals result, powers off
-          sudo tee /tmp/rootfs/run-test.sh > /dev/null << 'INITSCRIPT'
-          #!/bin/bash
-          set -o pipefail
-          export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin HOME=/root
-          mount -t proc proc /proc 2>/dev/null || true
-          mount -t sysfs sys /sys 2>/dev/null || true
-          mount -t devtmpfs dev /dev 2>/dev/null || true
-          ip link set lo up 2>/dev/null || true
-          echo "=== s390x test runner ==="
-          echo "Node: $(node --version)"
-          cd /tmp/nodejs-test || exit 1
-          CI=true REQUIRE_PUSH_TESTS=false \
-            node --no-turbofan --no-maglev --no-sparkplug \
-            ./node_modules/.bin/ava --config ava-precompiled.config.mjs 2>&1 | tee /tmp/test-output.txt
-          TEST_EXIT=$?
-          if [ "$TEST_EXIT" -eq 0 ]; then echo "TEST_RESULT_CODE=0"
-          else dmesg; echo "TEST_RESULT_CODE=1"; fi
-          sync; sleep 1; echo o > /proc/sysrq-trigger; sleep infinity
-          INITSCRIPT
-          sudo chmod +x /tmp/rootfs/run-test.sh
+          sudo install -m 755 .github/scripts/s390x-init.sh /tmp/rootfs/run-test.sh
 
           truncate -s 4G /tmp/rootfs.img
           sudo mke2fs -q -t ext4 -d /tmp/rootfs -L rootfs /tmp/rootfs.img
@@ -459,7 +464,7 @@ jobs:
         run: corepack enable
 
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --immutable
 
       - name: Download native binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # ratchet:actions/download-artifact@v8

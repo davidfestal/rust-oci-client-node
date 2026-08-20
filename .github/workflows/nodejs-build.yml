@@ -26,6 +26,9 @@ on:
       - '.github/workflows/nodejs-build.yml'
       - 'deny.toml'
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
