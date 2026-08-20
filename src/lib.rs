@@ -41,6 +41,11 @@ fn oci_error(context: &str, err: oci_client::errors::OciDistributionError) -> Er
     Error::from_reason(format!("{}: {}", context, format_error_chain(&err)))
 }
 
+fn parse_reference(value: &str) -> Result<Reference> {
+    Reference::from_str(value)
+        .map_err(|e| Error::from_reason(format!("Invalid image reference '{}': {}", value, e)))
+}
+
 // ============================================================================
 // Authentication Types
 // ============================================================================
@@ -793,8 +798,7 @@ impl OciClient {
         accepted_media_types: Vec<String>,
     ) -> Result<ImageData> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
         let native_auth = auth.to_native()?;
         let media_types: Vec<&str> = accepted_media_types.iter().map(|s| s.as_str()).collect();
 
@@ -821,8 +825,7 @@ impl OciClient {
         manifest: Option<ImageManifest>,
     ) -> Result<PushResponse> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image_ref)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image_ref)?;
         let native_auth = auth.to_native()?;
         let native_layers: Vec<NativeImageLayer> = layers.iter().map(|l| l.to_native()).collect();
         let native_config = config.to_native();
@@ -854,8 +857,7 @@ impl OciClient {
         artifact_type: Option<String>,
     ) -> Result<ImageIndex> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
 
         let referrers = client
             .pull_referrers(&reference, artifact_type.as_deref())
@@ -878,8 +880,7 @@ impl OciClient {
         manifest: ImageIndex,
     ) -> Result<String> {
         let client = self.client()?;
-        let ref_parsed = Reference::from_str(&reference)
-            .map_err(|e| Error::from_reason(format!("Invalid reference: {}", e)))?;
+        let ref_parsed = parse_reference(&reference)?;
         let native_auth = auth.to_native()?;
         let native_manifest: OciImageIndex = manifest.into();
 
@@ -904,8 +905,7 @@ impl OciClient {
         auth: RegistryAuth,
     ) -> Result<PullImageManifestResult> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
         let native_auth = auth.to_native()?;
 
         let (manifest, digest) = client
@@ -942,8 +942,7 @@ impl OciClient {
         auth: RegistryAuth,
     ) -> Result<PullManifestResult> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
         let native_auth = auth.to_native()?;
 
         let (manifest, digest) = client
@@ -966,8 +965,7 @@ impl OciClient {
         accepted_media_types: Vec<String>,
     ) -> Result<Buffer> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
         let native_auth = auth.to_native()?;
         let media_types: Vec<&str> = accepted_media_types.iter().map(|s| s.as_str()).collect();
 
@@ -984,8 +982,7 @@ impl OciClient {
     #[napi]
     pub async fn push_manifest(&self, image: String, manifest: Manifest) -> Result<String> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
 
         let native_manifest: OciManifest = manifest
             .try_into()
@@ -1002,8 +999,7 @@ impl OciClient {
     #[napi]
     pub async fn push_blob(&self, image: String, data: Buffer, digest: String) -> Result<String> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
 
         client
             .push_blob(&reference, data.to_vec(), &digest)
@@ -1016,8 +1012,7 @@ impl OciClient {
     #[napi]
     pub async fn pull_blob(&self, image: String, digest: String) -> Result<Buffer> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
 
         let mut data = Vec::new();
         client
@@ -1032,8 +1027,7 @@ impl OciClient {
     #[napi]
     pub async fn blob_exists(&self, image: String, digest: String) -> Result<bool> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
 
         client
             .blob_exists(&reference, &digest)
@@ -1045,10 +1039,8 @@ impl OciClient {
     #[napi]
     pub async fn mount_blob(&self, target: String, source: String, digest: String) -> Result<()> {
         let client = self.client()?;
-        let target_ref = Reference::from_str(&target)
-            .map_err(|e| Error::from_reason(format!("Invalid target reference: {}", e)))?;
-        let source_ref = Reference::from_str(&source)
-            .map_err(|e| Error::from_reason(format!("Invalid source reference: {}", e)))?;
+        let target_ref = parse_reference(&target)?;
+        let source_ref = parse_reference(&source)?;
 
         client
             .mount_blob(&target_ref, &source_ref, &digest)
@@ -1066,8 +1058,7 @@ impl OciClient {
         last: Option<String>,
     ) -> Result<Vec<String>> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
         let native_auth = auth.to_native()?;
 
         let tags = client
@@ -1087,8 +1078,7 @@ impl OciClient {
     #[napi]
     pub async fn fetch_manifest_digest(&self, image: String, auth: RegistryAuth) -> Result<String> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
         let native_auth = auth.to_native()?;
 
         client
@@ -1109,8 +1099,7 @@ impl OciClient {
         last: Option<String>,
     ) -> Result<Vec<String>> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
         let native_auth = auth.to_native()?;
 
         let catalog = client
@@ -1138,8 +1127,7 @@ impl OciClient {
         auth: RegistryAuth,
     ) -> Result<PullImageManifestAndListDigestResult> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
         let native_auth = auth.to_native()?;
 
         let (manifest, digest, list_digest) = client
@@ -1165,8 +1153,7 @@ impl OciClient {
         auth: RegistryAuth,
     ) -> Result<PullManifestAndConfigAndListDigestResult> {
         let client = self.client()?;
-        let reference = Reference::from_str(&image)
-            .map_err(|e| Error::from_reason(format!("Invalid image reference: {}", e)))?;
+        let reference = parse_reference(&image)?;
         let native_auth = auth.to_native()?;
 
         let (manifest, digest, config, list_digest) = client
