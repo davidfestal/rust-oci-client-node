@@ -6,11 +6,11 @@ Node.js bindings for the [rust-oci-client](https://github.com/oras-project/rust-
 
 ## Features
 
-- **Pure API Mirror**: Function signatures match the native Rust functions exactly
-- **High Performance**: Uses NAPI-RS for zero-copy data transfer where possible
+- **High Performance**: Native Rust via NAPI-RS; binary data uses Node.js `Buffer`
 - **Full Auth Support**: Anonymous, Basic (username/password), and Bearer token authentication
 - **Complete ClientConfig**: All native configuration options exposed
-- **TypeScript Support**: Full type definitions included
+- **Multi-Platform Images**: Built-in platform resolution for Image Index manifests
+- **TypeScript Support**: Full type definitions included (see [index.d.ts](./index.d.ts))
 
 ## Installation
 
@@ -61,7 +61,7 @@ const response = await client.push(
   layers,
   config,
   basicAuth('username', 'password'),
-  null // Let the client generate the manifest
+  undefined // Let the client generate the manifest
 );
 
 console.log(`Manifest URL: ${response.manifestUrl}`);

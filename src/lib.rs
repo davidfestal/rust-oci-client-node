@@ -1,7 +1,8 @@
 //! Node.js NAPI bindings for rust-oci-client
 //!
-//! This module provides a pure, precise JavaScript API mirror of the native oci-client library.
-//! All function signatures match the native Rust functions exactly.
+//! Provides a JS-adapted API over the native `oci-client` crate via NAPI-RS.
+//! Types are translated to JS-friendly equivalents (e.g. Rust enums become
+//! discriminated structs, `bytes::Bytes` becomes `Buffer`).
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -41,11 +42,11 @@ fn oci_error(context: &str, err: oci_client::errors::OciDistributionError) -> Er
 }
 
 // ============================================================================
-// Authentication Types - Mirror RegistryAuth exactly
+// Authentication Types
 // ============================================================================
 
 /// Authentication method for registry access.
-/// Mirrors the native RegistryAuth enum exactly.
+/// Wraps native `RegistryAuth`.
 #[napi(string_enum)]
 pub enum RegistryAuthType {
     /// Access the registry anonymously
@@ -97,11 +98,11 @@ impl RegistryAuth {
 }
 
 // ============================================================================
-// Client Configuration Types - Mirror ClientConfig exactly
+// Client Configuration Types
 // ============================================================================
 
 /// Protocol configuration for the client.
-/// Mirrors the native ClientProtocol enum.
+/// Wraps native `ClientProtocol`.
 #[napi(string_enum)]
 pub enum ClientProtocol {
     /// Use HTTP (insecure)
@@ -113,7 +114,7 @@ pub enum ClientProtocol {
 }
 
 /// Certificate encoding format.
-/// Mirrors the native CertificateEncoding enum.
+/// Wraps native `CertificateEncoding`.
 #[napi(string_enum)]
 pub enum CertificateEncoding {
     /// DER encoded certificate
@@ -123,7 +124,7 @@ pub enum CertificateEncoding {
 }
 
 /// A x509 certificate for TLS.
-/// Mirrors the native Certificate struct.
+/// Wraps native `Certificate`.
 #[napi(object)]
 pub struct Certificate {
     /// Which encoding is used by the certificate
@@ -157,7 +158,7 @@ pub struct PlatformFilter {
 }
 
 /// Client configuration options.
-/// Mirrors the native ClientConfig struct with all available options.
+/// Wraps native `ClientConfig`.
 #[napi(object)]
 pub struct ClientConfig {
     /// Which protocol the client should use (default: Https)
@@ -279,11 +280,11 @@ impl ClientConfig {
 }
 
 // ============================================================================
-// Data Types - Mirror ImageLayer, Config, ImageData, PushResponse exactly
+// Data Types
 // ============================================================================
 
 /// An image layer with data and metadata.
-/// Mirrors the native ImageLayer struct.
+/// Wraps native `ImageLayer`.
 #[napi(object)]
 pub struct ImageLayer {
     /// The layer data as raw bytes
@@ -313,7 +314,7 @@ impl ImageLayer {
 }
 
 /// Configuration object for an image.
-/// Mirrors the native Config struct.
+/// Wraps native `Config`.
 #[napi(object)]
 pub struct Config {
     /// The config data as raw bytes
@@ -343,7 +344,7 @@ impl Config {
 }
 
 /// Data returned from pulling an image.
-/// Mirrors the native ImageData struct.
+/// Wraps native `ImageData`.
 #[napi(object)]
 pub struct ImageData {
     /// The layers of the image
@@ -372,7 +373,7 @@ impl ImageData {
 }
 
 /// Response from pushing an image.
-/// Mirrors the native PushResponse struct.
+/// Wraps native `PushResponse`.
 #[napi(object)]
 pub struct PushResponse {
     /// Pullable URL for the config
@@ -719,7 +720,7 @@ pub struct PullManifestAndConfigAndListDigestResult {
 }
 
 // ============================================================================
-// Main Client - Mirrors the native Client
+// Main Client
 // ============================================================================
 
 /// OCI Distribution client for interacting with OCI registries.
@@ -781,7 +782,7 @@ impl OciClient {
 
     /// Pull an image from the registry.
     ///
-    /// Arguments match native: `pull(image: &Reference, auth: &RegistryAuth, accepted_media_types: Vec<&str>)`
+    /// Wraps native `Client::pull`.
     ///
     /// Returns ImageData containing layers (as Buffers), config, and manifest.
     #[napi]
@@ -807,7 +808,7 @@ impl OciClient {
 
     /// Push an image to the registry.
     ///
-    /// Arguments match native: `push(image_ref: &Reference, layers: &[ImageLayer], config: Config, auth: &RegistryAuth, manifest: Option<OciImageManifest>)`
+    /// Wraps native `Client::push`.
     ///
     /// Returns PushResponse with config and manifest URLs.
     #[napi]
@@ -843,7 +844,7 @@ impl OciClient {
 
     /// Pull referrers for an artifact (OCI 1.1 Referrers API).
     ///
-    /// Arguments match native: `pull_referrers(image: &Reference, artifact_type: Option<&str>)`
+    /// Wraps native `Client::pull_referrers`.
     ///
     /// Returns an ImageIndex containing the referrers.
     #[napi]
@@ -866,7 +867,7 @@ impl OciClient {
 
     /// Push a manifest list (image index) to the registry.
     ///
-    /// Arguments match native: `push_manifest_list(reference: &Reference, auth: &RegistryAuth, manifest: OciImageIndex)`
+    /// Wraps native `Client::push_manifest_list`.
     ///
     /// Returns the manifest URL.
     #[napi]
@@ -890,7 +891,7 @@ impl OciClient {
 
     /// Pull an image manifest from the registry.
     ///
-    /// Arguments match native: `pull_image_manifest(image: &Reference, auth: &RegistryAuth)`
+    /// Wraps native `Client::pull_image_manifest`.
     ///
     /// If a multi-platform Image Index manifest is encountered, a platform-specific
     /// Image manifest will be selected using the client's default platform resolution.
