@@ -203,6 +203,30 @@ export class MockRegistry {
         return
       }
 
+      // Error-triggering repos for structured error tests
+      if (url.startsWith('/v2/error-server/')) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' })
+        res.end('Internal Server Error from mock')
+        return
+      }
+      if (url.startsWith('/v2/error-unauthorized/')) {
+        res.writeHead(401)
+        res.end()
+        return
+      }
+      if (url.startsWith('/v2/error-registry/')) {
+        const envelope = {
+          errors: [{
+            code: 'MANIFEST_UNKNOWN',
+            message: 'manifest unknown to registry',
+            detail: { Tag: 'latest' },
+          }],
+        }
+        res.writeHead(404, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(envelope))
+        return
+      }
+
       // /v2/{name}/manifests/{ref}
       if (url.includes('/manifests/')) {
         this.serveManifest(req, res)

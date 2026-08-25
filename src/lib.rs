@@ -4,6 +4,8 @@
 //! Types are translated to JS-friendly equivalents (e.g. Rust enums become
 //! discriminated structs, `bytes::Bytes` becomes `Buffer`).
 
+mod error;
+
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -13,12 +15,12 @@ use oci_client::client::{
     Config as NativeConfig, ImageData as NativeImageData, ImageLayer as NativeImageLayer,
     PushResponse as NativePushResponse,
 };
-use oci_client::errors::OciDistributionError;
 use oci_client::manifest::{
     ImageIndexEntry, OciDescriptor, OciImageIndex, OciImageManifest, OciManifest, Platform,
 };
 use oci_client::secrets::RegistryAuth as NativeRegistryAuth;
 use oci_client::{Client, Reference};
+use oci_client::errors::OciDistributionError;
 use oci_spec::image::{Arch, Os};
 
 use std::collections::BTreeMap;
@@ -26,24 +28,11 @@ use std::convert::TryFrom;
 use std::str::FromStr;
 use std::time::Duration;
 
-fn format_error_chain(err: &dyn std::error::Error) -> String {
-    let mut msg = err.to_string();
-    let mut current = err.source();
-    while let Some(source) = current {
-        msg.push_str(": ");
-        msg.push_str(&source.to_string());
-        current = source.source();
-    }
-    msg
-}
+use error::oci_error;
 
-fn oci_error(context: &str, err: oci_client::errors::OciDistributionError) -> Error {
-    Error::from_reason(format!("{}: {}", context, format_error_chain(&err)))
-}
-
-fn parse_reference(value: &str) -> Result<Reference> {
+fn parse_reference(env: Env, value: &str) -> Result<Reference> {
     Reference::from_str(value)
-        .map_err(|e| Error::from_reason(format!("Invalid image reference '{}': {}", value, e)))
+        .map_err(|e| oci_error(&env, e))
 }
 
 // ============================================================================
@@ -662,20 +651,24 @@ impl From<OciManifest> for Manifest {
 }
 
 impl TryFrom<Manifest> for OciManifest {
-    type Error = String;
+    type Error = OciDistributionError;
 
     fn try_from(m: Manifest) -> std::result::Result<Self, Self::Error> {
         match m.manifest_type {
             ManifestType::Image => {
-                let img = m
-                    .image
-                    .ok_or("image field required for Image manifest type")?;
+                let img = m.image.ok_or_else(|| {
+                    OciDistributionError::ManifestParsingError(
+                        "image field required for Image manifest type".to_string(),
+                    )
+                })?;
                 Ok(OciManifest::Image(img.into()))
             }
             ManifestType::ImageIndex => {
-                let idx = m
-                    .image_index
-                    .ok_or("image_index field required for ImageIndex manifest type")?;
+                let idx = m.image_index.ok_or_else(|| {
+                    OciDistributionError::ManifestParsingError(
+                        "image_index field required for ImageIndex manifest type".to_string(),
+                    )
+                })?;
                 Ok(OciManifest::ImageIndex(idx.into()))
             }
         }
@@ -769,11 +762,10 @@ impl OciClient {
     /// silently falls back to defaults — in Node.js there is no `tracing`
     /// subscriber to surface those warnings, so we fail explicitly instead.
     #[napi(factory)]
-    pub fn with_config(config: ClientConfig) -> Result<Self> {
+    pub fn with_config(env: Env, config: ClientConfig) -> Result<Self> {
         let native_config = config.to_native();
-        let client = Client::try_from(native_config).map_err(|e: OciDistributionError| {
-            Error::from_reason(format!("Invalid client configuration: {}", e))
-        })?;
+        let client = Client::try_from(native_config)
+            .map_err(|e| oci_error(&env,e))?;
         Ok(OciClient {
             inner: parking_lot::Mutex::new(Some(client)),
         })
@@ -801,23 +793,29 @@ impl OciClient {
     ///
     /// Returns ImageData containing layers (as Buffers), config, and manifest.
     #[napi]
-    pub async fn pull(
+    pub fn pull(
         &self,
+        env: Env,
         image: String,
         auth: RegistryAuth,
         accepted_media_types: Vec<String>,
-    ) -> Result<ImageData> {
+    ) -> Result<AsyncBlock<ImageData>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
         let native_auth = auth.to_native()?;
-        let media_types: Vec<&str> = accepted_media_types.iter().map(|s| s.as_str()).collect();
+        let media_types: Vec<String> = accepted_media_types;
 
-        let image_data = client
-            .pull(&reference, &native_auth, media_types)
-            .await
-            .map_err(|e| oci_error("Pull failed", e))?;
-
-        Ok(ImageData::from_native(image_data))
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move {
+                let refs: Vec<&str> = media_types.iter().map(|s| s.as_str()).collect();
+                Ok(client.pull(&reference, &native_auth, refs).await)
+            },
+            move |env, result| match result {
+                Ok(image_data) => Ok(ImageData::from_native(image_data)),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Push an image to the registry.
@@ -826,33 +824,40 @@ impl OciClient {
     ///
     /// Returns PushResponse with config and manifest URLs.
     #[napi]
-    pub async fn push(
+    pub fn push(
         &self,
+        env: Env,
         image_ref: String,
         layers: Vec<ImageLayer>,
         config: Config,
         auth: RegistryAuth,
         manifest: Option<ImageManifest>,
-    ) -> Result<PushResponse> {
+    ) -> Result<AsyncBlock<PushResponse>> {
         let client = self.client()?;
-        let reference = parse_reference(&image_ref)?;
+        let reference = parse_reference(env, &image_ref)?;
         let native_auth = auth.to_native()?;
         let native_layers: Vec<NativeImageLayer> = layers.iter().map(|l| l.to_native()).collect();
         let native_config = config.to_native();
         let native_manifest: Option<OciImageManifest> = manifest.map(|m| m.into());
 
-        let response = client
-            .push(
-                &reference,
-                &native_layers,
-                native_config,
-                &native_auth,
-                native_manifest,
-            )
-            .await
-            .map_err(|e| oci_error("Push failed", e))?;
-
-        Ok(response.into())
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move {
+                Ok(client
+                    .push(
+                        &reference,
+                        &native_layers,
+                        native_config,
+                        &native_auth,
+                        native_manifest,
+                    )
+                    .await)
+            },
+            move |env, result| match result {
+                Ok(response) => Ok(response.into()),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Pull referrers for an artifact (OCI 1.1 Referrers API).
@@ -861,20 +866,27 @@ impl OciClient {
     ///
     /// Returns an ImageIndex containing the referrers.
     #[napi]
-    pub async fn pull_referrers(
+    pub fn pull_referrers(
         &self,
+        env: Env,
         image: String,
         artifact_type: Option<String>,
-    ) -> Result<ImageIndex> {
+    ) -> Result<AsyncBlock<ImageIndex>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
 
-        let referrers = client
-            .pull_referrers(&reference, artifact_type.as_deref())
-            .await
-            .map_err(|e| oci_error("Pull referrers failed", e))?;
-
-        Ok(referrers.into())
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move {
+                Ok(client
+                    .pull_referrers(&reference, artifact_type.as_deref())
+                    .await)
+            },
+            move |env, result| match result {
+                Ok(referrers) => Ok(referrers.into()),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Push a manifest list (image index) to the registry.
@@ -883,21 +895,30 @@ impl OciClient {
     ///
     /// Returns the manifest URL.
     #[napi]
-    pub async fn push_manifest_list(
+    pub fn push_manifest_list(
         &self,
+        env: Env,
         reference: String,
         auth: RegistryAuth,
         manifest: ImageIndex,
-    ) -> Result<String> {
+    ) -> Result<AsyncBlock<String>> {
         let client = self.client()?;
-        let ref_parsed = parse_reference(&reference)?;
+        let ref_parsed = parse_reference(env, &reference)?;
         let native_auth = auth.to_native()?;
         let native_manifest: OciImageIndex = manifest.into();
 
-        client
-            .push_manifest_list(&ref_parsed, &native_auth, native_manifest)
-            .await
-            .map_err(|e| oci_error("Push manifest list failed", e))
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move {
+                Ok(client
+                    .push_manifest_list(&ref_parsed, &native_auth, native_manifest)
+                    .await)
+            },
+            move |env, result| match result {
+                Ok(url) => Ok(url),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Pull an image manifest from the registry.
@@ -909,24 +930,27 @@ impl OciClient {
     ///
     /// Returns both the manifest and its digest.
     #[napi]
-    pub async fn pull_image_manifest(
+    pub fn pull_image_manifest(
         &self,
+        env: Env,
         image: String,
         auth: RegistryAuth,
-    ) -> Result<PullImageManifestResult> {
+    ) -> Result<AsyncBlock<PullImageManifestResult>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
         let native_auth = auth.to_native()?;
 
-        let (manifest, digest) = client
-            .pull_image_manifest(&reference, &native_auth)
-            .await
-            .map_err(|e| oci_error("Pull image manifest failed", e))?;
-
-        Ok(PullImageManifestResult {
-            manifest: manifest.into(),
-            digest,
-        })
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move { Ok(client.pull_image_manifest(&reference, &native_auth).await) },
+            move |env, result| match result {
+                Ok((manifest, digest)) => Ok(PullImageManifestResult {
+                    manifest: manifest.into(),
+                    digest,
+                }),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     // ========================================================================
@@ -946,183 +970,258 @@ impl OciClient {
     /// Pull a manifest (either image or index) from the registry.
     /// Returns the manifest and its digest.
     #[napi]
-    pub async fn pull_manifest(
+    pub fn pull_manifest(
         &self,
+        env: Env,
         image: String,
         auth: RegistryAuth,
-    ) -> Result<PullManifestResult> {
+    ) -> Result<AsyncBlock<PullManifestResult>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
         let native_auth = auth.to_native()?;
 
-        let (manifest, digest) = client
-            .pull_manifest(&reference, &native_auth)
-            .await
-            .map_err(|e| oci_error("Pull manifest failed", e))?;
-
-        Ok(PullManifestResult {
-            manifest: manifest.into(),
-            digest,
-        })
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move { Ok(client.pull_manifest(&reference, &native_auth).await) },
+            move |env, result| match result {
+                Ok((manifest, digest)) => Ok(PullManifestResult {
+                    manifest: manifest.into(),
+                    digest,
+                }),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Pull a manifest as raw bytes.
     #[napi]
-    pub async fn pull_manifest_raw(
+    pub fn pull_manifest_raw(
         &self,
+        env: Env,
         image: String,
         auth: RegistryAuth,
         accepted_media_types: Vec<String>,
-    ) -> Result<Buffer> {
+    ) -> Result<AsyncBlock<Buffer>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
         let native_auth = auth.to_native()?;
-        let media_types: Vec<&str> = accepted_media_types.iter().map(|s| s.as_str()).collect();
+        let media_types: Vec<String> = accepted_media_types;
 
-        let (bytes, _digest) = client
-            .pull_manifest_raw(&reference, &native_auth, &media_types)
-            .await
-            .map_err(|e| oci_error("Pull manifest raw failed", e))?;
-
-        Ok(Buffer::from(bytes.to_vec()))
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move {
+                let refs: Vec<&str> = media_types.iter().map(|s| s.as_str()).collect();
+                Ok(client
+                    .pull_manifest_raw(&reference, &native_auth, &refs)
+                    .await)
+            },
+            move |env, result| match result {
+                Ok((bytes, _digest)) => Ok(Buffer::from(bytes.to_vec())),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Push a manifest to the registry.
     /// Returns the manifest URL.
     #[napi]
-    pub async fn push_manifest(&self, image: String, manifest: Manifest) -> Result<String> {
+    pub fn push_manifest(
+        &self,
+        env: Env,
+        image: String,
+        manifest: Manifest,
+    ) -> Result<AsyncBlock<String>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
 
         let native_manifest: OciManifest = manifest
             .try_into()
-            .map_err(|e: String| Error::from_reason(e))?;
+            .map_err(|e| oci_error(&env, e))?;
 
-        client
-            .push_manifest(&reference, &native_manifest)
-            .await
-            .map_err(|e| oci_error("Push manifest failed", e))
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move { Ok(client.push_manifest(&reference, &native_manifest).await) },
+            move |env, result| match result {
+                Ok(url) => Ok(url),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Push a blob to the registry.
     /// Returns the blob digest.
     #[napi]
-    pub async fn push_blob(&self, image: String, data: Buffer, digest: String) -> Result<String> {
+    pub fn push_blob(
+        &self,
+        env: Env,
+        image: String,
+        data: Buffer,
+        digest: String,
+    ) -> Result<AsyncBlock<String>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
+        let blob_data = data.to_vec();
 
-        client
-            .push_blob(&reference, data.to_vec(), &digest)
-            .await
-            .map_err(|e| oci_error("Push blob failed", e))
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move { Ok(client.push_blob(&reference, blob_data, &digest).await) },
+            move |env, result| match result {
+                Ok(url) => Ok(url),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Pull a blob from the registry.
     /// Returns the blob data.
     #[napi]
-    pub async fn pull_blob(&self, image: String, digest: String) -> Result<Buffer> {
+    pub fn pull_blob(&self, env: Env, image: String, digest: String) -> Result<AsyncBlock<Buffer>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
 
-        let mut data = Vec::new();
-        client
-            .pull_blob(&reference, digest.as_str(), &mut data)
-            .await
-            .map_err(|e| oci_error("Pull blob failed", e))?;
-
-        Ok(Buffer::from(data))
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move {
+                let mut data = Vec::new();
+                Ok(client
+                    .pull_blob(&reference, digest.as_str(), &mut data)
+                    .await
+                    .map(|_| data))
+            },
+            move |env, result| match result {
+                Ok(data) => Ok(Buffer::from(data)),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Check if a blob exists in the registry.
     #[napi]
-    pub async fn blob_exists(&self, image: String, digest: String) -> Result<bool> {
+    pub fn blob_exists(&self, env: Env, image: String, digest: String) -> Result<AsyncBlock<bool>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
 
-        client
-            .blob_exists(&reference, &digest)
-            .await
-            .map_err(|e| oci_error("Blob exists check failed", e))
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move { Ok(client.blob_exists(&reference, &digest).await) },
+            move |env, result| match result {
+                Ok(exists) => Ok(exists),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Mount a blob from another repository.
     #[napi]
-    pub async fn mount_blob(&self, target: String, source: String, digest: String) -> Result<()> {
+    pub fn mount_blob(
+        &self,
+        env: Env,
+        target: String,
+        source: String,
+        digest: String,
+    ) -> Result<AsyncBlock<()>> {
         let client = self.client()?;
-        let target_ref = parse_reference(&target)?;
-        let source_ref = parse_reference(&source)?;
+        let target_ref = parse_reference(env, &target)?;
+        let source_ref = parse_reference(env, &source)?;
 
-        client
-            .mount_blob(&target_ref, &source_ref, &digest)
-            .await
-            .map_err(|e| oci_error("Mount blob failed", e))
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move { Ok(client.mount_blob(&target_ref, &source_ref, &digest).await) },
+            move |env, result| match result {
+                Ok(()) => Ok(()),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// List tags for a repository.
     #[napi]
-    pub async fn list_tags(
+    pub fn list_tags(
         &self,
+        env: Env,
         image: String,
         auth: RegistryAuth,
         n: Option<u32>,
         last: Option<String>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<AsyncBlock<Vec<String>>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
         let native_auth = auth.to_native()?;
 
-        let tags = client
-            .list_tags(
-                &reference,
-                &native_auth,
-                n.map(|v| v as usize),
-                last.as_deref(),
-            )
-            .await
-            .map_err(|e| oci_error("List tags failed", e))?;
-
-        Ok(tags.tags)
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move {
+                Ok(client
+                    .list_tags(
+                        &reference,
+                        &native_auth,
+                        n.map(|v| v as usize),
+                        last.as_deref(),
+                    )
+                    .await)
+            },
+            move |env, result| match result {
+                Ok(tags) => Ok(tags.tags),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Fetch manifest digest without downloading the full manifest.
     #[napi]
-    pub async fn fetch_manifest_digest(&self, image: String, auth: RegistryAuth) -> Result<String> {
+    pub fn fetch_manifest_digest(
+        &self,
+        env: Env,
+        image: String,
+        auth: RegistryAuth,
+    ) -> Result<AsyncBlock<String>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
         let native_auth = auth.to_native()?;
 
-        client
-            .fetch_manifest_digest(&reference, &native_auth)
-            .await
-            .map_err(|e| oci_error("Fetch manifest digest failed", e))
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move { Ok(client.fetch_manifest_digest(&reference, &native_auth).await) },
+            move |env, result| match result {
+                Ok(digest) => Ok(digest),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// List available repositories in the registry.
     /// Implements the OCI Distribution Spec catalog endpoint (`/v2/_catalog`).
     /// Supports pagination via `n` (page size) and `last` (last repo from previous page).
     #[napi]
-    pub async fn catalog(
+    pub fn catalog(
         &self,
+        env: Env,
         image: String,
         auth: RegistryAuth,
         n: Option<u32>,
         last: Option<String>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<AsyncBlock<Vec<String>>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
         let native_auth = auth.to_native()?;
 
-        let catalog = client
-            .catalog(
-                &reference,
-                &native_auth,
-                n.map(|v| v as usize),
-                last.as_deref(),
-            )
-            .await
-            .map_err(|e| oci_error("Catalog listing failed", e))?;
-
-        Ok(catalog.repositories)
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move {
+                Ok(client
+                    .catalog(
+                        &reference,
+                        &native_auth,
+                        n.map(|v| v as usize),
+                        last.as_deref(),
+                    )
+                    .await)
+            },
+            move |env, result| match result {
+                Ok(catalog) => Ok(catalog.repositories),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Pull an image manifest and the parent manifest list digest from the registry.
@@ -1131,25 +1230,32 @@ impl OciClient {
     /// manifest list/image index when the resolved manifest came from one.
     /// This is needed for signature verification on multi-arch images.
     #[napi]
-    pub async fn pull_image_manifest_and_list_digest(
+    pub fn pull_image_manifest_and_list_digest(
         &self,
+        env: Env,
         image: String,
         auth: RegistryAuth,
-    ) -> Result<PullImageManifestAndListDigestResult> {
+    ) -> Result<AsyncBlock<PullImageManifestAndListDigestResult>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
         let native_auth = auth.to_native()?;
 
-        let (manifest, digest, list_digest) = client
-            .pull_image_manifest_and_list_digest(&reference, &native_auth)
-            .await
-            .map_err(|e| oci_error("Pull image manifest and list digest failed", e))?;
-
-        Ok(PullImageManifestAndListDigestResult {
-            manifest: manifest.into(),
-            digest,
-            list_digest,
-        })
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move {
+                Ok(client
+                    .pull_image_manifest_and_list_digest(&reference, &native_auth)
+                    .await)
+            },
+            move |env, result| match result {
+                Ok((manifest, digest, list_digest)) => Ok(PullImageManifestAndListDigestResult {
+                    manifest: manifest.into(),
+                    digest,
+                    list_digest,
+                }),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 
     /// Pull a manifest, its config, and the parent manifest list digest from the registry.
@@ -1157,26 +1263,35 @@ impl OciClient {
     /// Returns the image manifest, its digest, the config JSON as a string,
     /// and the parent manifest list/image index digest when applicable.
     #[napi]
-    pub async fn pull_manifest_and_config_and_list_digest(
+    pub fn pull_manifest_and_config_and_list_digest(
         &self,
+        env: Env,
         image: String,
         auth: RegistryAuth,
-    ) -> Result<PullManifestAndConfigAndListDigestResult> {
+    ) -> Result<AsyncBlock<PullManifestAndConfigAndListDigestResult>> {
         let client = self.client()?;
-        let reference = parse_reference(&image)?;
+        let reference = parse_reference(env, &image)?;
         let native_auth = auth.to_native()?;
 
-        let (manifest, digest, config, list_digest) = client
-            .pull_manifest_and_config_and_list_digest(&reference, &native_auth)
-            .await
-            .map_err(|e| oci_error("Pull manifest and config and list digest failed", e))?;
-
-        Ok(PullManifestAndConfigAndListDigestResult {
-            manifest: manifest.into(),
-            digest,
-            config,
-            list_digest,
-        })
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move {
+                Ok(client
+                    .pull_manifest_and_config_and_list_digest(&reference, &native_auth)
+                    .await)
+            },
+            move |env, result| match result {
+                Ok((manifest, digest, config, list_digest)) => {
+                    Ok(PullManifestAndConfigAndListDigestResult {
+                        manifest: manifest.into(),
+                        digest,
+                        config,
+                        list_digest,
+                    })
+                }
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
     }
 }
 

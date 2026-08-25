@@ -9,16 +9,19 @@
  */
 
 import test from 'ava'
-import * as crypto from 'crypto'
+import type { ExecutionContext } from 'ava';
+import * as crypto from "crypto";
 import {
   OciClient,
   anonymousAuth,
   basicAuth,
   bearerAuth,
+  fromOciError,
   RegistryAuthType,
   ClientProtocol,
   CertificateEncoding,
   ManifestType,
+  OciErrorCode,
   // Media type constants
   IMAGE_LAYER_MEDIA_TYPE,
   IMAGE_LAYER_GZIP_MEDIA_TYPE,
@@ -43,7 +46,7 @@ import {
   type Manifest,
   type PullImageManifestAndListDigestResult,
   type PullManifestAndConfigAndListDigestResult,
-} from '../index.js'
+} from "../index.js";
 import {
   MockRegistry, generateTlsCerts,
   MANIFEST_DIGEST, CONFIG_DIGEST, BLOB_DIGEST,
@@ -203,8 +206,9 @@ test('OciClient.withConfig - should create client with tlsCertsOnly', async (t) 
 
 test('OciClient.withConfig - should not silently accept invalid certificate data', (t) => {
   // native-tls rejects at construction; rustls defers to connection time.
+  let client: OciClient | undefined;
   try {
-    OciClient.withConfig({
+    client = OciClient.withConfig({
       protocol: ClientProtocol.Https,
       tlsCertsOnly: [{
         encoding: CertificateEncoding.Pem,
@@ -215,7 +219,19 @@ test('OciClient.withConfig - should not silently accept invalid certificate data
     // by "TLS - should fail without CA cert".
     t.pass()
   } catch (e: unknown) {
-    t.true((e as Error).message.includes('Invalid client configuration'))
+    const err = e as Error & { type?: string };
+    t.is(err.type, "RequestError");
+    t.is(err.message, "builder error");
+    enhancedDeepEqual(t, err.cause, {
+      type: /^(Error|Os|Normal)$/,
+      message: (val: unknown) => typeof val === 'string' && (
+        val.match(/^The data is invalid./i) ||
+        val == 'Unknown format in import.'||
+        val.match(/error:.+:PEM routines:.+:no start line:crypto\/pem\/pem_lib\.c:.+:Expecting: CERTIFICATE/)),
+      parsed: (val: unknown) => typeof val === 'object' && val !== null,
+    });
+  } finally {
+    client?.close();
   }
 })
 
@@ -223,11 +239,11 @@ test('OciClient.withConfig - should not silently accept invalid certificate data
 // Close Tests
 // =============================================================================
 
-test('close - should release the client and prevent further operations', async (t) => {
+test('close - should release the client and prevent further operations', (t) => {
   const client = new OciClient()
   t.is(client.close(), true, 'first close returns true')
   t.is(client.close(), false, 'second close returns false (idempotent)')
-  await t.throwsAsync(
+  t.throws(
     () => client.pull('localhost:5000/test:latest', anonymousAuth(), []),
     { message: /Client is closed/ },
   )
@@ -380,10 +396,10 @@ test.before(async () => {
   console.log(`🧪 Mock registry started on ${MOCK_REGISTRY}`)
 })
 
-test.after(async () => {
-  mockClient.close()
-  await mockRegistry.stop()
-})
+test.after.always(async () => {
+  mockClient.close();
+  await mockRegistry.stop();
+});
 
 test.serial('pullManifest - should pull manifest from mock registry', async (t) => {
   const result = await mockClient.pullManifest(
@@ -490,9 +506,9 @@ test.serial('pull - should pull full image with layers', async (t) => {
   t.true(imageData.layers[0].data.length > 0)
 })
 
-test.serial('Error Handling - should throw error for invalid image reference', async (t) => {
-  await t.throwsAsync(
-    mockClient.pullManifest('invalid:::reference', anonymousAuth())
+test.serial('Error Handling - should throw error for invalid image reference', (t) => {
+  t.throws(
+    () => mockClient.pullManifest('invalid:::reference', anonymousAuth()),
   )
 })
 
@@ -722,9 +738,9 @@ test.before(async () => {
   console.log(`🔒 TLS mock registry started on ${TLS_REGISTRY}`)
 })
 
-test.after(async () => {
-  await tlsRegistry.stop()
-})
+test.after.always(async () => {
+  await tlsRegistry.stop();
+});
 
 test.serial('TLS - should connect with extraRootCertificates', async (t) => {
   const client = OciClient.withConfig({
@@ -794,10 +810,10 @@ if (!skipZot) {
     zotClient = zot.createClient()
   })
 
-  test.after(async () => {
-    zotClient.close()
-    await zot.stop()
-  })
+  test.after.always(async () => {
+    zotClient.close();
+    await zot.stop();
+  });
 }
 
 const zotTest = skipZot ? test.skip : test.serial
@@ -1123,3 +1139,273 @@ zotTest('pullImageManifest - should select correct platform from multi-arch imag
   t.is(result.manifest.schemaVersion, 2)
 })
 
+// =============================================================================
+// Structured Error Tests (fromOciError)
+// =============================================================================
+
+test.serial('fromOciError - should produce Generic for a plain Error without type', (t) => {
+  const err = new Error('some random error')
+  const ociErr = fromOciError(err)
+  t.is(ociErr.type, 'GenericError')
+  t.is(ociErr.message, 'some random error')
+})
+
+test.serial('fromOciError - should stamp type on async OCI error (connection refused)', async (t) => {
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http })
+
+  const err = await t.throwsAsync(
+    client.pullManifest('127.0.0.1:1/test:latest', anonymousAuth()),
+  )
+
+  t.truthy(err)
+  const raw = err as any
+  t.is(typeof raw.type, 'string', 'type should be stamped on the raw Error')
+  t.is(typeof raw.message, 'string', 'message should be present')
+  t.true(err instanceof Error, 'should be a proper Error instance')
+
+    const ociErr = fromOciError(err!)
+    t.is(ociErr.type, raw.type, 'fromOciError should read back the same type')
+    t.truthy(ociErr.message)
+  },
+);
+
+test.serial('fromOciError - should include cause chain for Request errors', async (t) => {
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http })
+
+  const err = await t.throwsAsync(
+    client.pullManifest('127.0.0.1:1/test:latest', anonymousAuth()),
+  )
+
+  t.truthy(err)
+  t.truthy(err instanceof Error, "should be a proper Error instance");
+  const ociErr = fromOciError(err!);
+  t.is(ociErr.type, "RequestError");
+  t.is(
+    ociErr.message,
+    "error sending request for url (http://127.0.0.1:1/v2/test/manifests/latest)",
+  );  
+  enhancedDeepEqual(t, ociErr.cause, {
+    type: "hyper_util::client::legacy::Error",
+    message: "client error (Connect)",
+    debug: /^hyper_util::client::legacy::Error\(Connect, ConnectError\("tcp connect error", 127\.0\.0\.1:1, Os { code: \d+, kind: ConnectionRefused, message: "(Connection refused|No connection could be made.*)" }\)\)$/,
+    parsed: {
+      args: [
+        "Connect",
+        /^ConnectError\("tcp connect error", 127\.0\.0\.1:1, Os { code: \d+, kind: ConnectionRefused, message: "(Connection refused|No connection could be made.*)" }\)$/,
+      ],
+    },
+    cause: {
+      type: "ConnectError",
+      message: "tcp connect error",
+      debug: /^ConnectError\("tcp connect error", 127\.0\.0\.1:1, Os { code: \d+, kind: ConnectionRefused, message: ".*" }\)$/,
+      parsed: {
+        args: [
+          "tcp connect error",
+          "127.0.0.1:1",
+          /^Os { code: \d+, kind: ConnectionRefused, message: ".*" }$/,
+        ],
+      },
+      cause: {
+        type: "Os",
+        message: /(Connection refused|No connection could be made)/i,
+        debug: /^Os \{ code: \d+, kind: ConnectionRefused, message: ".*" }$/,
+        parsed: {
+          code: (val: unknown) => typeof val === 'number' && (
+            val === 61 ||
+            val === 10061 ||
+            val === 111
+          ),
+          kind: "ConnectionRefused",
+          message: /(Connection refused|No connection could be made)/i,
+        },
+      },
+    },
+  });
+});
+
+test.serial('fromOciError - should preserve error.type through fromOciError round-trip', async (t) => {
+  const client = OciClient.withConfig({
+    protocol: ClientProtocol.Http,
+    platform: { os: 'freebsd', architecture: 's390x' },
+  })
+
+  const err = await t.throwsAsync(
+    client.pullImageManifest(
+      `${MOCK_REGISTRY}/test-multiarch:latest`,
+      anonymousAuth(),
+    ),
+  )
+
+  t.truthy(err)
+  const raw = err as any
+  t.is(typeof raw.type, 'string', 'type is stamped')
+
+  const ociErr = fromOciError(err!)
+  t.truthy(ociErr.message)
+  t.is(raw.type, ociErr.type, 'round-trip preserves type')
+})
+
+// =============================================================================
+// Structured Error Tests — extra fields on specific variants
+// =============================================================================
+
+test.serial('ServerError - should expose statusCode, url, and serverMessage', async (t) => {
+  const err = await t.throwsAsync(
+    mockClient.pullManifest(`${MOCK_REGISTRY}/error-server:latest`, anonymousAuth()),
+  )
+
+  t.truthy(err)
+  const raw = err as any
+  const expectedUrl = `http://${MOCK_REGISTRY}/v2/error-server/manifests/latest`
+  t.is(raw.type, 'ServerError')
+  t.is(raw.statusCode, 500)
+  t.is(raw.url, expectedUrl)
+  t.is(raw.serverMessage, 'Internal Server Error from mock')
+  t.true(err instanceof Error, 'should be a proper Error instance')
+
+  const ociErr = fromOciError(err!)
+  t.is(ociErr.type, 'ServerError')
+  if (ociErr.type === 'ServerError') {
+    t.is(ociErr.statusCode, 500)
+    t.is(ociErr.url, expectedUrl)
+    t.is(ociErr.serverMessage, 'Internal Server Error from mock')
+  }
+})
+
+test.serial('UnauthorizedError - should expose url', async (t) => {
+  const err = await t.throwsAsync(
+    mockClient.pullManifest(`${MOCK_REGISTRY}/error-unauthorized:latest`, anonymousAuth()),
+  )
+
+  t.truthy(err)
+  const raw = err as any
+  const expectedUrl = `http://${MOCK_REGISTRY}/v2/error-unauthorized/manifests/latest`
+  t.is(raw.type, 'UnauthorizedError')
+  t.is(raw.url, expectedUrl)
+  t.true(err instanceof Error, 'should be a proper Error instance')
+
+  const ociErr = fromOciError(err!)
+  t.is(ociErr.type, 'UnauthorizedError')
+  if (ociErr.type === 'UnauthorizedError') {
+    t.is(ociErr.url, expectedUrl)
+  }
+})
+
+test.serial('RegistryError - should expose url and errors array', async (t) => {
+  const err = await t.throwsAsync(
+    mockClient.pullManifest(`${MOCK_REGISTRY}/error-registry:latest`, anonymousAuth()),
+  )
+
+  t.truthy(err)
+  const raw = err as any
+  const expectedUrl = `http://${MOCK_REGISTRY}/v2/error-registry/manifests/latest`
+  t.is(raw.type, 'RegistryError')
+  t.is(raw.url, expectedUrl)
+  t.true(Array.isArray(raw.errors), 'errors should be an array')
+  t.is(raw.errors.length, 1)
+  t.is(raw.errors[0].code, OciErrorCode.ManifestUnknown)
+  t.is(raw.errors[0].message, 'manifest unknown to registry')
+  t.true(err instanceof Error, 'should be a proper Error instance')
+
+  const ociErr = fromOciError(err!)
+  t.is(ociErr.type, 'RegistryError')
+  if (ociErr.type === 'RegistryError') {
+    t.is(ociErr.url, expectedUrl)
+    t.is(ociErr.errors.length, 1)
+    t.is(ociErr.errors[0].code, OciErrorCode.ManifestUnknown)
+  }
+})
+
+test.serial('ImageManifestNotFoundError - should expose image field', async (t) => {
+  const client = OciClient.withConfig({
+    protocol: ClientProtocol.Http,
+    platform: { os: 'freebsd', architecture: 's390x' },
+  })
+
+  const err = await t.throwsAsync(
+    client.pullImageManifest(
+      `${MOCK_REGISTRY}/test-multiarch:latest`,
+      anonymousAuth(),
+    ),
+  )
+
+  t.truthy(err)
+  const raw = err as any
+  t.is(raw.type, 'ImageManifestNotFoundError')
+  t.is(typeof raw.image, 'string')
+  t.truthy(raw.image, 'image field should be non-empty')
+  t.true(err instanceof Error, 'should be a proper Error instance')
+
+  const ociErr = fromOciError(err!)
+  t.is(ociErr.type, 'ImageManifestNotFoundError')
+  if (ociErr.type === 'ImageManifestNotFoundError') {
+    t.is(ociErr.image, raw.image, 'fromOciError round-trip preserves image')
+  }
+});
+
+
+
+/**
+ * Projects `actual` down to the shape of `template`.
+ * If `template` contains RegExps or predicate functions, it evaluates them against `actual`
+ * and converts matching values into identical placeholders so `t.deepEqual` passes.
+ */
+function enhancedDeepEqual(t: ExecutionContext, actual: any, template: any): boolean {
+  function prepareComparable(actual: any, template: any): { actual: any; expected: any } {
+
+    // 1. RegExp matching
+    if (template instanceof RegExp) {
+      const isMatch = typeof actual === 'string' && template.test(actual);
+      const label = `<MATCH: ${template}>`;
+      return {
+        actual: isMatch ? label : actual,
+        expected: label,
+      };
+    }
+
+    // 2. Predicate function matching
+    if (typeof template === 'function') {
+      const isMatch = template(actual);
+      const label = `<PREDICATE_MATCH>`;
+      return {
+        actual: isMatch ? label : actual,
+        expected: label,
+      };
+    }
+
+    // 3. Array handling (only inspect indices present in template)
+    if (Array.isArray(template)) {
+      if (!Array.isArray(actual)) {
+        return { actual, expected: template };
+      }
+      const compActual: any[] = [];
+      const compExpected: any[] = [];
+      template.forEach((item, i) => {
+        const res = prepareComparable(actual[i], item);
+        compActual[i] = res.actual;
+        compExpected[i] = res.expected;
+      });
+      return { actual: compActual, expected: compExpected };
+    }
+
+    // 4. Object handling (only inspect keys present in template - like t.like)
+    if (template !== null && typeof template === 'object') {
+      if (actual === null || typeof actual !== 'object') {
+        return { actual, expected: template };
+      }
+      const compActual: Record<string, any> = {};
+      const compExpected: Record<string, any> = {};
+      for (const key of Object.keys(template)) {
+        const res = prepareComparable(actual[key], template[key]);
+        compActual[key] = res.actual;
+        compExpected[key] = res.expected;
+      }
+      return { actual: compActual, expected: compExpected };
+    }
+
+    // 5. Primitive equality
+    return { actual, expected: template };
+  }
+  const { actual: compActual, expected: compExpected } = prepareComparable(actual, template);
+  return t.deepEqual(compActual, compExpected);
+}
