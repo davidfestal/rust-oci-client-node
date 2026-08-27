@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - first-contribution
     paths:
       - 'src/**'
       - 'Cargo.toml'
