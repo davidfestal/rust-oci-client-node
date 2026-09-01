@@ -2,12 +2,58 @@
   "name": "@oras-project/oci-client",
   "version": "0.17.0",
   "description": "Node.js bindings for rust-oci-client - OCI Distribution client",
-  "main": "index.js",
-  "types": "index.d.ts",
+  "keywords": [
+    "bindings",
+    "container",
+    "distribution",
+    "docker",
+    "napi",
+    "oci",
+    "registry",
+    "rust"
+  ],
+  "homepage": "https://github.com/oras-project/rust-oci-client-node#readme",
+  "bugs": {
+    "url": "https://github.com/oras-project/rust-oci-client-node/issues"
+  },
+  "license": "Apache-2.0",
+  "author": "The ORAS Authors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oras-project/rust-oci-client-node.git"
+  },
   "files": [
     "index.d.ts",
     "index.js"
   ],
+  "main": "index.js",
+  "types": "index.d.ts",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "yarn sync-version && napi build --platform --release && yarn fix-const-enums",
+    "build:debug": "yarn sync-version && napi build --platform && yarn fix-const-enums",
+    "fix-const-enums": "node scripts/fix-const-enums.js",
+    "format": "oxfmt . && cargo fmt --all",
+    "lint": "oxlint .",
+    "prepublishOnly": "napi prepublish -t npm --no-gh-release",
+    "test": "ava",
+    "version": "napi version",
+    "sync-version": "node scripts/sync-version.js"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.2.0",
+    "@oxc-node/core": "^0.0.35",
+    "@types/node": "^20.0.0",
+    "ava": "^6.4.1",
+    "oxfmt": "^0.65.0",
+    "oxlint": "^1.14.0",
+    "selfsigned": "^5.5.0",
+    "typescript": "^5.9.2"
+  },
   "napi": {
     "binaryName": "oci-client",
     "targets": [
@@ -22,66 +68,22 @@
       "powerpc64le-unknown-linux-gnu"
     ]
   },
-  "engines": {
-    "node": ">= 22"
-  },
-  "publishConfig": {
-    "registry": "https://registry.npmjs.org/",
-    "access": "public"
-  },
-  "scripts": {
-    "artifacts": "napi artifacts",
-    "build": "yarn sync-version && napi build --platform --release && yarn fix-const-enums",
-    "build:debug": "yarn sync-version && napi build --platform && yarn fix-const-enums",
-    "fix-const-enums": "node scripts/fix-const-enums.js",
-    "lint": "oxlint .",
-    "prepublishOnly": "napi prepublish -t npm --no-gh-release",
-    "test": "ava",
-    "version": "napi version",
-    "sync-version": "node scripts/sync-version.js"
-  },
-  "devDependencies": {
-    "@napi-rs/cli": "^3.2.0",
-    "@oxc-node/core": "^0.0.35",
-    "@types/node": "^20.0.0",
-    "ava": "^6.4.1",
-    "oxlint": "^1.14.0",
-    "selfsigned": "^5.5.0",
-    "typescript": "^5.9.2"
-  },
   "ava": {
-    "extensions": {
-      "ts": "module"
-    },
-    "timeout": "2m",
-    "workerThreads": false,
     "environmentVariables": {
       "OXC_TSCONFIG_PATH": "./__test__/tsconfig.json"
+    },
+    "extensions": {
+      "ts": "module"
     },
     "nodeArguments": [
       "--import",
       "@oxc-node/core/register"
-    ]
+    ],
+    "timeout": "2m",
+    "workerThreads": false
   },
-  "keywords": [
-    "oci",
-    "registry",
-    "container",
-    "docker",
-    "distribution",
-    "napi",
-    "rust",
-    "bindings"
-  ],
-  "author": "The ORAS Authors",
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/oras-project/rust-oci-client-node.git"
-  },
-  "homepage": "https://github.com/oras-project/rust-oci-client-node#readme",
-  "bugs": {
-    "url": "https://github.com/oras-project/rust-oci-client-node/issues"
+  "engines": {
+    "node": ">= 22"
   },
   "packageManager": "yarn@4.12.0"
 }
