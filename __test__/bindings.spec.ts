@@ -61,8 +61,9 @@ import {
   AMD64_MANIFEST_DIGEST,
   ARM64_MANIFEST_DIGEST,
   IMAGE_INDEX_DIGEST,
-} from './mock-registry.js';
-import { ZotRegistry, shouldSkipZotTests } from './zot-registry.js';
+  ZotRegistry,
+  shouldSkipZotTests,
+} from '@oras-project/oci-client-testing';
 
 /** SHA-256 digest of a file on disk (`sha256:<hex>`), without loading the whole blob into a Buffer. */
 async function sha256File(filePath: string): Promise<string> {

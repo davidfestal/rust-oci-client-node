@@ -7,7 +7,7 @@
 
 import { execSync } from 'child_process';
 import * as net from 'net';
-import { OciClient, ClientProtocol } from '../index.js';
+import { OciClient, ClientProtocol } from '@oras-project/oci-client';
 
 export const CONTAINER_NAME_PREFIX = 'oci-client-test-registry';
 export const ZOT_IMAGE =
@@ -138,7 +138,6 @@ export class ZotRegistry {
   private _containerName: string;
 
   constructor() {
-    // Generate unique container name to avoid conflicts when test files run in parallel
     this._containerName = `${CONTAINER_NAME_PREFIX}-${process.pid}-${++instanceCounter}`;
   }
 

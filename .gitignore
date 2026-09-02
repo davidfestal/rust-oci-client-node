@@ -27,3 +27,6 @@ Thumbs.db
 !.yarn/plugins
 !.yarn/sdks
 !.yarn/versions
+
+# Testing package build output
+testing/dist/

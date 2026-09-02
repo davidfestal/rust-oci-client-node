@@ -1,0 +1,30 @@
+{
+  "name": "@oras-project/oci-client-testing",
+  "version": "0.17.0",
+  "description": "Test utilities for @oras-project/oci-client — MockRegistry (in-process) and ZotRegistry (container-based)",
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "fixtures"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "publishConfig": {
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "selfsigned": "^5.5.0"
+  },
+  "devDependencies": {
+    "@oras-project/oci-client": "workspace:*",
+    "typescript": "^5.9.2"
+  },
+  "peerDependencies": {
+    "@oras-project/oci-client": ">=0.17.0"
+  }
+}

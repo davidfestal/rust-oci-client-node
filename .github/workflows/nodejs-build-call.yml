@@ -225,6 +225,9 @@ jobs:
         with:
           name: bindings-js
 
+      - name: Build testing package
+        run: yarn workspace @oras-project/oci-client-testing build
+
       - name: Test bindings
         run: yarn test
         env:
@@ -262,6 +265,9 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # ratchet:actions/download-artifact@v8
         with:
           name: bindings-js
+
+      - name: Build testing package
+        run: yarn workspace @oras-project/oci-client-testing build
 
       - name: Test bindings
         run: yarn test
@@ -314,6 +320,9 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # ratchet:actions/download-artifact@v8
         with:
           name: bindings-js
+
+      - name: Build testing package
+        run: yarn workspace @oras-project/oci-client-testing build
 
       - name: Pre-compile TypeScript tests on host
         run: npx tsc -p __test__/tsconfig.json --outDir __test__
@@ -408,6 +417,9 @@ jobs:
         with:
           name: bindings-js
 
+      - name: Build testing package
+        run: yarn workspace @oras-project/oci-client-testing build
+
       - name: Pre-compile TypeScript tests on host
         run: npx tsc -p __test__/tsconfig.json --outDir __test__
 
@@ -475,6 +487,9 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # ratchet:actions/download-artifact@v8
         with:
           name: bindings-js
+
+      - name: Build testing package
+        run: yarn workspace @oras-project/oci-client-testing build
 
       - name: Run integration tests with Zot registry
         run: yarn test

@@ -16,7 +16,7 @@ import * as crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import selfsigned from 'selfsigned';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function sha256digest(buf: Buffer): string {
   return `sha256:${crypto.createHash('sha256').update(buf).digest('hex')}`;
@@ -26,7 +26,7 @@ function sha256digest(buf: Buffer): string {
 // Single-platform fixtures (from native Rust tests)
 // ---------------------------------------------------------------------------
 
-const FIXTURES_DIR = path.join(__dirname, 'fixtures');
+const FIXTURES_DIR = path.join(PACKAGE_ROOT, 'fixtures');
 const CONFIG = fs.readFileSync(path.join(FIXTURES_DIR, 'config.json'));
 const BLOB = fs.readFileSync(path.join(FIXTURES_DIR, 'blob.tar.gz'));
 

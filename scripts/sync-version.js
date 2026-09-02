@@ -35,4 +35,25 @@ if (pkg.version !== cargo) {
 } else {
   console.log('Versions in sync:', cargo);
 }
+
+// Sync testing/package.json version in lockstep
+const testingPkgPath = 'testing/package.json';
+if (fs.existsSync(testingPkgPath)) {
+  const testingPkg = JSON.parse(fs.readFileSync(testingPkgPath, 'utf8'));
+  if (testingPkg.version !== cargo) {
+    if (checkOnly) {
+      console.error(
+        `::error::testing/package.json version (${testingPkg.version}) does not match Cargo.toml (${cargo})`,
+      );
+      failed = true;
+    } else {
+      testingPkg.version = cargo;
+      fs.writeFileSync(testingPkgPath, JSON.stringify(testingPkg, null, 2) + '\n');
+      console.log('Synced testing/package.json version to', cargo);
+    }
+  } else {
+    console.log('testing/package.json version in sync:', cargo);
+  }
+}
+
 if (failed) process.exit(1);
