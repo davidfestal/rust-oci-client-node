@@ -29,6 +29,8 @@ napi-derive = "3"
 
 oci-client = { version = "0.17", default-features = false }
 
+bytes = "1"
+
 parking_lot = "0.12"
 
 oci-spec = "0.9"

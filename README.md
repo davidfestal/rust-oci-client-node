@@ -134,7 +134,7 @@ Pull an image from the registry. Returns `ImageData` with layers as Buffers.
 
 #### `push(imageRef, layers, config, auth, manifest?)`
 
-Push an image to the registry. Returns `PushResponse`.
+Push an image to the registry. Returns `PushResponse`. Do not mutate layer or config `Buffer`s until the Promise settles (same contract as `fs.write` / `socket.write`).
 
 #### `pullImageManifest(image, auth)`
 
@@ -166,7 +166,7 @@ Pull a blob from the registry. Returns a `Buffer`.
 
 #### `pushBlob(image, data, digest)`
 
-Push a blob to the registry. Returns the blob digest.
+Push a blob to the registry. Returns the blob digest. Do not mutate `data` until the Promise settles (same contract as `fs.write` / `socket.write`).
 
 #### `blobExists(image, digest)`
 

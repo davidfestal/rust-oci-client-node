@@ -295,17 +295,21 @@ pub struct ImageLayer {
 impl ImageLayer {
     fn from_native(layer: NativeImageLayer) -> Self {
         ImageLayer {
-            data: Buffer::from(layer.data.to_vec()),
+            data: Buffer::from(Vec::<u8>::from(layer.data)),
             media_type: layer.media_type,
             annotations: layer.annotations,
         }
     }
 
-    fn to_native(&self) -> NativeImageLayer {
+    /// Moves the NAPI `Buffer` into a native layer without copying.
+    ///
+    /// The JS `Buffer` must not be mutated until the owning `push` Promise settles
+    /// (same contract as `fs.write` / `socket.write`).
+    fn into_native(self) -> NativeImageLayer {
         NativeImageLayer::new(
-            self.data.to_vec(),
-            self.media_type.clone(),
-            self.annotations.clone(),
+            bytes::Bytes::from_owner(self.data),
+            self.media_type,
+            self.annotations,
         )
     }
 }
@@ -325,17 +329,21 @@ pub struct Config {
 impl Config {
     fn from_native(config: NativeConfig) -> Self {
         Config {
-            data: Buffer::from(config.data.to_vec()),
+            data: Buffer::from(Vec::<u8>::from(config.data)),
             media_type: config.media_type,
             annotations: config.annotations,
         }
     }
 
-    fn to_native(&self) -> NativeConfig {
+    /// Moves the NAPI `Buffer` into a native config without copying.
+    ///
+    /// The JS `Buffer` must not be mutated until the owning `push` Promise settles
+    /// (same contract as `fs.write` / `socket.write`).
+    fn into_native(self) -> NativeConfig {
         NativeConfig::new(
-            self.data.to_vec(),
-            self.media_type.clone(),
-            self.annotations.clone(),
+            bytes::Bytes::from_owner(self.data),
+            self.media_type,
+            self.annotations,
         )
     }
 }
@@ -820,6 +828,10 @@ impl OciClient {
     ///
     /// Wraps native `Client::push`.
     ///
+    /// Do not mutate `layers[].data` or `config.data` until this Promise settles.
+    /// The Buffers are borrowed for the duration of the upload (same contract as
+    /// Node `fs.write` / `socket.write`).
+    ///
     /// Returns PushResponse with config and manifest URLs.
     #[napi]
     pub fn push(
@@ -834,8 +846,9 @@ impl OciClient {
         let client = self.client()?;
         let reference = parse_reference(env, &image_ref)?;
         let native_auth = auth.to_native()?;
-        let native_layers: Vec<NativeImageLayer> = layers.iter().map(|l| l.to_native()).collect();
-        let native_config = config.to_native();
+        let native_layers: Vec<NativeImageLayer> =
+            layers.into_iter().map(ImageLayer::into_native).collect();
+        let native_config = config.into_native();
         let native_manifest: Option<OciImageManifest> = manifest.map(|m| m.into());
 
         AsyncBlockBuilder::build_with_map(
@@ -1014,7 +1027,7 @@ impl OciClient {
                     .await)
             },
             move |env, result| match result {
-                Ok((bytes, _digest)) => Ok(Buffer::from(bytes.to_vec())),
+                Ok((bytes, _digest)) => Ok(Buffer::from(Vec::<u8>::from(bytes))),
                 Err(err) => Err(oci_error(&env, err)),
             },
         )
@@ -1046,6 +1059,10 @@ impl OciClient {
 
     /// Push a blob to the registry.
     /// Returns the blob digest.
+    ///
+    /// Do not mutate `data` until this Promise settles. The Buffer is borrowed
+    /// for the duration of the upload (same contract as Node `fs.write` /
+    /// `socket.write`).
     #[napi]
     pub fn push_blob(
         &self,
@@ -1056,7 +1073,7 @@ impl OciClient {
     ) -> Result<AsyncBlock<String>> {
         let client = self.client()?;
         let reference = parse_reference(env, &image)?;
-        let blob_data = data.to_vec();
+        let blob_data = bytes::Bytes::from_owner(data);
 
         AsyncBlockBuilder::build_with_map(
             &env,
