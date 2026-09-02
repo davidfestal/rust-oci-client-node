@@ -3,10 +3,9 @@ use thiserror::Error;
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use regex::Regex;
-
 
 use oci_client::errors::{
     OciDistributionError as NativeOciDistributionError, OciEnvelope,
@@ -251,17 +250,31 @@ impl From<&NativeOciDistributionError> for OciDistributionError {
     fn from(err: &NativeOciDistributionError) -> Self {
         let message = err.to_string();
         match err {
-            NativeOciDistributionError::AuthenticationFailure(_) => {
-                Self::AuthenticationFailure { message, cause: None }
-            }
-            NativeOciDistributionError::ConfigConversionError(_) => {
-                Self::ConfigConversionError { message, cause: None }
-            }
-            NativeOciDistributionError::DigestError(_) => Self::DigestError { message, cause: None },
-            NativeOciDistributionError::GenericError(_) => Self::GenericError { message, cause: None },
-            NativeOciDistributionError::HeaderValueError(_) => Self::HeaderValueError { message, cause: None },
+            NativeOciDistributionError::AuthenticationFailure(_) => Self::AuthenticationFailure {
+                message,
+                cause: None,
+            },
+            NativeOciDistributionError::ConfigConversionError(_) => Self::ConfigConversionError {
+                message,
+                cause: None,
+            },
+            NativeOciDistributionError::DigestError(_) => Self::DigestError {
+                message,
+                cause: None,
+            },
+            NativeOciDistributionError::GenericError(_) => Self::GenericError {
+                message,
+                cause: None,
+            },
+            NativeOciDistributionError::HeaderValueError(_) => Self::HeaderValueError {
+                message,
+                cause: None,
+            },
             NativeOciDistributionError::ImageIndexParsingNoPlatformResolverError => {
-                Self::ImageIndexParsingNoPlatformResolverError { message, cause: None }
+                Self::ImageIndexParsingNoPlatformResolverError {
+                    message,
+                    cause: None,
+                }
             }
             NativeOciDistributionError::ImageManifestNotFoundError(image) => {
                 Self::ImageManifestNotFoundError {
@@ -271,37 +284,63 @@ impl From<&NativeOciDistributionError> for OciDistributionError {
                 }
             }
             NativeOciDistributionError::IncompatibleLayerMediaTypeError(_) => {
-                Self::IncompatibleLayerMediaTypeError { message, cause: None }
+                Self::IncompatibleLayerMediaTypeError {
+                    message,
+                    cause: None,
+                }
             }
-            NativeOciDistributionError::IoError(_) => Self::IoError { message, cause: None },
-            NativeOciDistributionError::JsonError(_) => Self::JsonError { message, cause: None },
-            NativeOciDistributionError::ManifestEncodingError(_) => {
-                Self::ManifestEncodingError { message, cause: None,   }
-            }
-            NativeOciDistributionError::ManifestParsingError(_) => {
-                Self::ManifestParsingError { message, cause: None }
-            }
-            NativeOciDistributionError::PullNoLayersError => Self::PullNoLayersError { message, cause: None },
-            NativeOciDistributionError::PushLayerNoDataError => {
-                Self::PushLayerNoDataError { message, cause: None }
-            }
-            NativeOciDistributionError::PushNoDataError => Self::PushNoDataError { message, cause: None },
+            NativeOciDistributionError::IoError(_) => Self::IoError {
+                message,
+                cause: None,
+            },
+            NativeOciDistributionError::JsonError(_) => Self::JsonError {
+                message,
+                cause: None,
+            },
+            NativeOciDistributionError::ManifestEncodingError(_) => Self::ManifestEncodingError {
+                message,
+                cause: None,
+            },
+            NativeOciDistributionError::ManifestParsingError(_) => Self::ManifestParsingError {
+                message,
+                cause: None,
+            },
+            NativeOciDistributionError::PullNoLayersError => Self::PullNoLayersError {
+                message,
+                cause: None,
+            },
+            NativeOciDistributionError::PushLayerNoDataError => Self::PushLayerNoDataError {
+                message,
+                cause: None,
+            },
+            NativeOciDistributionError::PushNoDataError => Self::PushNoDataError {
+                message,
+                cause: None,
+            },
             NativeOciDistributionError::RegistryError { envelope, url } => Self::RegistryError {
                 message,
                 cause: None,
                 url: url.clone(),
                 errors: convert_envelope(envelope),
             },
-            NativeOciDistributionError::RegistryNoDigestError => {
-                Self::RegistryNoDigestError { message, cause: None }
-            }
-            NativeOciDistributionError::RegistryNoLocationError => {
-                Self::RegistryNoLocationError { message, cause: None }
-            }
+            NativeOciDistributionError::RegistryNoDigestError => Self::RegistryNoDigestError {
+                message,
+                cause: None,
+            },
+            NativeOciDistributionError::RegistryNoLocationError => Self::RegistryNoLocationError {
+                message,
+                cause: None,
+            },
             NativeOciDistributionError::RegistryTokenDecodeError(_) => {
-                Self::RegistryTokenDecodeError { message, cause: None }
+                Self::RegistryTokenDecodeError {
+                    message,
+                    cause: None,
+                }
             }
-            NativeOciDistributionError::RequestError(_) => Self::RequestError { message, cause: None },
+            NativeOciDistributionError::RequestError(_) => Self::RequestError {
+                message,
+                cause: None,
+            },
             NativeOciDistributionError::ServerError {
                 code,
                 url,
@@ -313,24 +352,35 @@ impl From<&NativeOciDistributionError> for OciDistributionError {
                 url: url.clone(),
                 server_message: server_message.clone(),
             },
-            NativeOciDistributionError::SpecViolationError(_) => {
-                Self::SpecViolationError { message, cause: None }
-            }
+            NativeOciDistributionError::SpecViolationError(_) => Self::SpecViolationError {
+                message,
+                cause: None,
+            },
             NativeOciDistributionError::UnauthorizedError { url } => Self::UnauthorizedError {
                 message,
                 cause: None,
                 url: url.clone(),
             },
-            NativeOciDistributionError::UrlParseError(_) => Self::UrlParseError { message, cause: None },
+            NativeOciDistributionError::UrlParseError(_) => Self::UrlParseError {
+                message,
+                cause: None,
+            },
             NativeOciDistributionError::UnsupportedMediaTypeError(_) => {
-                Self::UnsupportedMediaTypeError { message, cause: None }
+                Self::UnsupportedMediaTypeError {
+                    message,
+                    cause: None,
+                }
             }
             NativeOciDistributionError::UnsupportedSchemaVersionError(_) => {
-                Self::UnsupportedSchemaVersionError { message, cause: None }
+                Self::UnsupportedSchemaVersionError {
+                    message,
+                    cause: None,
+                }
             }
-            NativeOciDistributionError::VersionedParsingError(_) => {
-                Self::VersionedParsingError { message, cause: None }
-            }
+            NativeOciDistributionError::VersionedParsingError(_) => Self::VersionedParsingError {
+                message,
+                cause: None,
+            },
         }
     }
 }
@@ -385,14 +435,38 @@ impl From<&NativeParseError> for ParseError {
     fn from(err: &NativeParseError) -> Self {
         let message = err.to_string();
         match err {
-            NativeParseError::DigestInvalidFormat => Self::DigestInvalidFormat { message, cause: None },
-            NativeParseError::DigestInvalidLength => Self::DigestInvalidLength { message, cause: None },
-            NativeParseError::DigestUnsupported => Self::DigestUnsupported { message, cause: None },
-            NativeParseError::NameContainsUppercase => Self::NameContainsUppercase { message, cause: None },
-            NativeParseError::NameEmpty => Self::NameEmpty { message, cause: None },
-            NativeParseError::NameTooLong => Self::NameTooLong { message, cause: None },
-            NativeParseError::ReferenceInvalidFormat => Self::ReferenceInvalidFormat { message, cause: None },
-            NativeParseError::TagInvalidFormat => Self::TagInvalidFormat { message, cause: None },
+            NativeParseError::DigestInvalidFormat => Self::DigestInvalidFormat {
+                message,
+                cause: None,
+            },
+            NativeParseError::DigestInvalidLength => Self::DigestInvalidLength {
+                message,
+                cause: None,
+            },
+            NativeParseError::DigestUnsupported => Self::DigestUnsupported {
+                message,
+                cause: None,
+            },
+            NativeParseError::NameContainsUppercase => Self::NameContainsUppercase {
+                message,
+                cause: None,
+            },
+            NativeParseError::NameEmpty => Self::NameEmpty {
+                message,
+                cause: None,
+            },
+            NativeParseError::NameTooLong => Self::NameTooLong {
+                message,
+                cause: None,
+            },
+            NativeParseError::ReferenceInvalidFormat => Self::ReferenceInvalidFormat {
+                message,
+                cause: None,
+            },
+            NativeParseError::TagInvalidFormat => Self::TagInvalidFormat {
+                message,
+                cause: None,
+            },
         }
     }
 }
@@ -431,7 +505,9 @@ pub enum OciBindingError {
 impl From<&NativeBindingError> for OciBindingError {
     fn from(err: &NativeBindingError) -> Self {
         match err {
-            NativeBindingError::Distribution(e) => Self::Distribution(OciDistributionError::from(e)),
+            NativeBindingError::Distribution(e) => {
+                Self::Distribution(OciDistributionError::from(e))
+            }
             NativeBindingError::Parse(e) => Self::Parse(ParseError::from(e)),
         }
     }
@@ -479,7 +555,7 @@ fn set_cause_chain(env: &Env, obj: &mut Object, err: &dyn StdError) {
         if let Ok(mut cause_obj) = Object::new(env) {
             // Explicitly set message as an own property so it survives from_js_value serialization
             let _ = cause_obj.set_named_property("message", env.create_string(source_message));
-            
+
             // Attach the full automatic Debug output as a property
             let _ = cause_obj.set_named_property("debug", env.create_string(&debug_str));
 
@@ -540,15 +616,14 @@ pub fn debug_to_json(debug_str: &str) -> (String, Value) {
             }
             return (type_name, Value::Object(map));
         }
-    } 
+    }
     // 3. Tuple Struct: Type(arg0, arg1, ...)
     else if let (Some(open), Some(close)) = (first_open_paren, s.rfind(')')) {
         let body = &s[open + 1..close];
         // Matches tuple arguments, capturing nested {}, (), or [] blocks whole
-        let arg_re = Regex::new(
-            r#"(?:"(?:\\.|[^"\\])*"|\{[^}]*\}|\([^)]*\)|\[[^\]]*\]|[^,()"{}\[\]]+)+"#,
-        )
-        .unwrap();
+        let arg_re =
+            Regex::new(r#"(?:"(?:\\.|[^"\\])*"|\{[^}]*\}|\([^)]*\)|\[[^\]]*\]|[^,()"{}\[\]]+)+"#)
+                .unwrap();
 
         let args: Vec<Value> = arg_re
             .find_iter(body)
@@ -600,7 +675,7 @@ pub fn from_oci_error(env: Env, err: Unknown) -> Result<Either<OciDistributionEr
         .unwrap_or_default();
 
     let Some(type_name) = obj.get::<String>("type").ok().flatten() else {
-        return Ok(Either::A(OciDistributionError::GenericError { 
+        return Ok(Either::A(OciDistributionError::GenericError {
             message,
             cause: None,
         }));

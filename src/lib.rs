@@ -15,12 +15,12 @@ use oci_client::client::{
     Config as NativeConfig, ImageData as NativeImageData, ImageLayer as NativeImageLayer,
     PushResponse as NativePushResponse,
 };
+use oci_client::errors::OciDistributionError;
 use oci_client::manifest::{
     ImageIndexEntry, OciDescriptor, OciImageIndex, OciImageManifest, OciManifest, Platform,
 };
 use oci_client::secrets::RegistryAuth as NativeRegistryAuth;
 use oci_client::{Client, Reference};
-use oci_client::errors::OciDistributionError;
 use oci_spec::image::{Arch, Os};
 
 use std::collections::BTreeMap;
@@ -31,8 +31,7 @@ use std::time::Duration;
 use error::oci_error;
 
 fn parse_reference(env: Env, value: &str) -> Result<Reference> {
-    Reference::from_str(value)
-        .map_err(|e| oci_error(&env, e))
+    Reference::from_str(value).map_err(|e| oci_error(&env, e))
 }
 
 // ============================================================================
@@ -764,8 +763,7 @@ impl OciClient {
     #[napi(factory)]
     pub fn with_config(env: Env, config: ClientConfig) -> Result<Self> {
         let native_config = config.to_native();
-        let client = Client::try_from(native_config)
-            .map_err(|e| oci_error(&env,e))?;
+        let client = Client::try_from(native_config).map_err(|e| oci_error(&env, e))?;
         Ok(OciClient {
             inner: parking_lot::Mutex::new(Some(client)),
         })
@@ -1034,9 +1032,7 @@ impl OciClient {
         let client = self.client()?;
         let reference = parse_reference(env, &image)?;
 
-        let native_manifest: OciManifest = manifest
-            .try_into()
-            .map_err(|e| oci_error(&env, e))?;
+        let native_manifest: OciManifest = manifest.try_into().map_err(|e| oci_error(&env, e))?;
 
         AsyncBlockBuilder::build_with_map(
             &env,

@@ -41,16 +41,14 @@ const armClient = OciClient.withConfig({
   platform: {
     os: 'linux',
     architecture: 'arm64',
-    variant: 'v8'  // optional
-  }
+    variant: 'v8', // optional
+  },
 });
 
 // Pull an image
-const imageData = await client.pull(
-  'ghcr.io/example/image:latest',
-  anonymousAuth(),
-  ['application/vnd.oci.image.layer.v1.tar+gzip']
-);
+const imageData = await client.pull('ghcr.io/example/image:latest', anonymousAuth(), [
+  'application/vnd.oci.image.layer.v1.tar+gzip',
+]);
 
 console.log(`Pulled ${imageData.layers.length} layers`);
 console.log(`Digest: ${imageData.digest}`);
@@ -61,7 +59,7 @@ const response = await client.push(
   layers,
   config,
   basicAuth('username', 'password'),
-  undefined // Let the client generate the manifest
+  undefined, // Let the client generate the manifest
 );
 
 console.log(`Manifest URL: ${response.manifestUrl}`);
@@ -69,20 +67,20 @@ console.log(`Manifest URL: ${response.manifestUrl}`);
 // Pull image manifest
 const { manifest, digest } = await client.pullImageManifest(
   'ghcr.io/example/image:latest',
-  anonymousAuth()
+  anonymousAuth(),
 );
 
 // Push a manifest list (multi-platform image)
 const manifestUrl = await client.pushManifestList(
   'registry.example.com/myimage:v1',
   basicAuth('username', 'password'),
-  imageIndex
+  imageIndex,
 );
 
 // Pull referrers (OCI 1.1)
 const referrers = await client.pullReferrers(
   'ghcr.io/example/image@sha256:abc123...',
-  'application/vnd.example.sbom'
+  'application/vnd.example.sbom',
 );
 ```
 
@@ -91,9 +89,11 @@ const referrers = await client.pullReferrers(
 ### Client
 
 #### `new OciClient()`
+
 Create a client with default configuration.
 
 #### `OciClient.withConfig(config: ClientConfig)`
+
 Create a client with custom configuration.
 
 ### Platform Selection
@@ -103,10 +103,10 @@ For multi-platform images (Image Index/Manifest List), you can specify the targe
 ```typescript
 const client = OciClient.withConfig({
   platform: {
-    os: 'linux',           // Required: linux, windows, darwin, etc.
+    os: 'linux', // Required: linux, windows, darwin, etc.
     architecture: 'arm64', // Required: amd64, arm64, arm, etc.
-    variant: 'v8'          // Optional: v7, v8, etc. for ARM
-  }
+    variant: 'v8', // Optional: v7, v8, etc. for ARM
+  },
 });
 ```
 
@@ -115,71 +115,93 @@ When pulling an image that references an Image Index, the client will automatica
 ### Authentication
 
 #### `anonymousAuth()`
+
 Create anonymous authentication.
 
 #### `basicAuth(username: string, password: string)`
+
 Create HTTP Basic authentication.
 
 #### `bearerAuth(token: string)`
+
 Create Bearer token authentication.
 
 ### Main Functions
 
 #### `pull(image, auth, acceptedMediaTypes)`
+
 Pull an image from the registry. Returns `ImageData` with layers as Buffers.
 
 #### `push(imageRef, layers, config, auth, manifest?)`
+
 Push an image to the registry. Returns `PushResponse`.
 
 #### `pullImageManifest(image, auth)`
+
 Pull an image manifest. Returns `{ manifest, digest }`. If a multi-platform Image Index is encountered, automatically selects the platform-specific manifest.
 
 #### `pullManifest(image, auth)`
+
 Pull a manifest (either image or image index) from the registry. Returns `{ manifest, digest }`.
 
 #### `pullManifestRaw(image, auth, acceptedMediaTypes)`
+
 Pull a manifest as raw bytes. Returns a `Buffer`.
 
 #### `pushManifest(image, manifest)`
+
 Push a manifest (image or image index) to the registry. Returns the manifest URL.
 
 #### `pushManifestList(reference, auth, manifest)`
+
 Push a manifest list (image index). Returns manifest URL.
 
 #### `pullReferrers(image, artifactType?)`
+
 Pull referrers for an artifact (OCI 1.1 Referrers API). Returns `ImageIndex`.
 
 #### `pullBlob(image, digest)`
+
 Pull a blob from the registry. Returns a `Buffer`.
 
 #### `pushBlob(image, data, digest)`
+
 Push a blob to the registry. Returns the blob digest.
 
 #### `blobExists(image, digest)`
+
 Check if a blob exists in the registry. Returns `boolean`.
 
 #### `mountBlob(target, source, digest)`
+
 Mount a blob from one repository to another (cross-repository blob mounting).
 
 #### `listTags(image, auth, n?, last?)`
+
 List tags for a repository. Supports pagination via `n` (page size) and `last` (last tag from previous page). Returns `string[]`.
 
 #### `fetchManifestDigest(image, auth)`
+
 Fetch a manifest's digest without downloading the full manifest content. Returns the digest string.
 
 #### `catalog(image, auth, n?, last?)`
+
 List available repositories in the registry (OCI Distribution Spec `/v2/_catalog`). Supports pagination via `n` (page size) and `last` (last repo from previous page). Returns `string[]`.
 
 #### `pullImageManifestAndListDigest(image, auth)`
+
 Like `pullImageManifest`, but also returns the digest of the parent manifest list/image index when the resolved manifest came from one. Returns `{ manifest, digest, listDigest }`.
 
 #### `pullManifestAndConfigAndListDigest(image, auth)`
+
 Pull a manifest, its config JSON, and the parent manifest list digest. Returns `{ manifest, digest, config, listDigest }`.
 
 #### `storeAuth(registry, auth)`
+
 Pre-authenticate with a registry. Useful for storing credentials before performing multiple operations.
 
 #### `close()`
+
 Explicitly release the underlying connection pool. Idempotent — returns `true` on first call, `false` on subsequent calls. After `close()`, all method calls will throw `"Client is closed"`.
 
 ### Types

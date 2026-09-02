@@ -1,7 +1,7 @@
 [advisories]
 ignore = [
-    { id = "RUSTSEC-2023-0071", reason = "rsa side channel attack, no fix exists yet" },
-    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is no longer maintained. This is a dependency of oci-spec crate" },
+  { id = "RUSTSEC-2023-0071", reason = "rsa side channel attack, no fix exists yet" },
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is no longer maintained. This is a dependency of oci-spec crate" },
 ]
 
 [licenses]
@@ -11,15 +11,7 @@ confidence-threshold = 1.0
 # List of explictly allowed licenses
 # See https://spdx.org/licenses/ for list of possible licenses
 # [possible values: any SPDX 3.11 short identifier (+ optional exception)].
-allow = [
-    "Apache-2.0",
-    "BSD-3-Clause",
-    "CDLA-Permissive-2.0",
-    "ISC",
-    "MIT",
-    "Unicode-3.0",
-    "Zlib",
-]
+allow = ["Apache-2.0", "BSD-3-Clause", "CDLA-Permissive-2.0", "ISC", "MIT", "Unicode-3.0", "Zlib"]
 
 [[licenses.clarify]]
 name = "encoding_rs"
