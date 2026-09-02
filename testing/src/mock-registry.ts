@@ -228,6 +228,13 @@ export class MockRegistry {
         return;
       }
 
+      // Referrers API: /v2/{name}/referrers/{digest}
+      const referrersMatch = url.match(/^\/v2\/([^/]+)\/referrers\/(.+?)(\?.*)?$/);
+      if (referrersMatch) {
+        this.serveReferrers(req, res, referrersMatch[1], referrersMatch[2]);
+        return;
+      }
+
       // Error-triggering repos for structured error tests
       if (url.startsWith('/v2/error-server/')) {
         res.writeHead(500, { 'Content-Type': 'text/plain' });
@@ -453,6 +460,31 @@ export class MockRegistry {
       res.writeHead(200, { [DIGEST_HEADER]: requestedDigest });
       res.end(content);
     }
+  }
+
+  // --- Referrers endpoint (OCI 1.1) ---
+
+  private serveReferrers(
+    _req: http.IncomingMessage,
+    res: http.ServerResponse,
+    _repo: string,
+    _digest: string,
+  ) {
+    const referrersIndex = {
+      schemaVersion: 2,
+      mediaType: 'application/vnd.oci.image.index.v1+json',
+      manifests: [
+        {
+          mediaType: 'application/vnd.oci.image.manifest.v1+json',
+          digest: 'sha256:aaaa000000000000000000000000000000000000000000000000000000000000',
+          size: 512,
+          artifactType: 'application/vnd.example.sbom.v1',
+          annotations: { 'org.opencontainers.image.created': '2024-06-01T00:00:00Z' },
+        },
+      ],
+    };
+    res.writeHead(200, { 'Content-Type': 'application/vnd.oci.image.index.v1+json' });
+    res.end(JSON.stringify(referrersIndex));
   }
 
   async stop(): Promise<void> {

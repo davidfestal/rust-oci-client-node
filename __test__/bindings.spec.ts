@@ -64,6 +64,7 @@ import {
   ZotRegistry,
   shouldSkipZotTests,
 } from '@oras-project/oci-client-testing';
+import { pushMultiarchImage } from './helpers.js';
 
 /** SHA-256 digest of a file on disk (`sha256:<hex>`), without loading the whole blob into a Buffer. */
 async function sha256File(filePath: string): Promise<string> {
@@ -579,6 +580,34 @@ test.serial('pull - should pull full image with layers', async (t) => {
   t.true(imageData.layers[0].data.length > 0);
 });
 
+test.serial('pullManifestRaw - should pull raw manifest bytes', async (t) => {
+  const raw = await mockClient.pullManifestRaw(`${MOCK_REGISTRY}/test:latest`, anonymousAuth(), [
+    'application/vnd.docker.distribution.manifest.v2+json',
+  ]);
+
+  t.true(raw instanceof Buffer);
+  t.true(raw.length > 0);
+  const parsed = JSON.parse(raw.toString('utf-8'));
+  t.is(parsed.schemaVersion, 2);
+  t.truthy(parsed.config);
+  t.truthy(parsed.layers);
+});
+
+test.serial('pullReferrers - should return referrers as ImageIndex', async (t) => {
+  await mockClient.storeAuth(MOCK_REGISTRY, anonymousAuth());
+  const referrers = await mockClient.pullReferrers(`${MOCK_REGISTRY}/test@${MANIFEST_DIGEST}`);
+
+  t.truthy(referrers);
+  t.is(referrers.schemaVersion, 2);
+  t.true(Array.isArray(referrers.manifests));
+  t.is(referrers.manifests.length, 1);
+  t.is(referrers.manifests[0].artifactType, 'application/vnd.example.sbom.v1');
+  t.is(
+    referrers.manifests[0].digest,
+    'sha256:aaaa000000000000000000000000000000000000000000000000000000000000',
+  );
+});
+
 test.serial('Error Handling - should throw error for invalid image reference', (t) => {
   t.throws(() => mockClient.pullManifest('invalid:::reference', anonymousAuth()));
 });
@@ -972,6 +1001,20 @@ zotTest('pushBlobFromFile - should round-trip to a file with the same digest', a
   t.is(await sha256File(dest), await sha256File(src));
 });
 
+zotTest('mountBlob - should mount a blob from another repository', async (t) => {
+  const sourceRepo = zot.repo('test-mount-source');
+  const targetRepo = zot.repo('test-mount-target');
+  const blobData = Buffer.from('mount-blob-test-' + Date.now());
+  const hash = crypto.createHash('sha256').update(blobData).digest('hex');
+  const digest = `sha256:${hash}`;
+
+  await zotClient.pushBlob(`${sourceRepo}:latest`, blobData, digest);
+  t.true(await zotClient.blobExists(`${sourceRepo}:latest`, digest));
+
+  await zotClient.mountBlob(`${targetRepo}:latest`, `${sourceRepo}:latest`, digest);
+  t.true(await zotClient.blobExists(`${targetRepo}:latest`, digest));
+});
+
 zotTest('pushManifest - should push a simple OCI image manifest', async (t) => {
   const configData = Buffer.from(
     JSON.stringify({
@@ -1083,111 +1126,8 @@ zotTest('push - should push a complete image using the push() method', async (t)
 
 zotTest('pushManifestList + pullManifest - should round-trip platform fields', async (t) => {
   const ZOT_MULTIARCH = zot.repo('test-multiarch-roundtrip');
+  const { amd64Digest, arm64Digest } = await pushMultiarchImage(zotClient, ZOT_MULTIARCH);
 
-  // Push a minimal image for amd64
-  const amd64Config = Buffer.from(
-    JSON.stringify({
-      architecture: 'amd64',
-      os: 'linux',
-      config: {},
-      rootfs: { type: 'layers', diff_ids: [] },
-    }),
-  );
-  const amd64ConfigDigest = `sha256:${crypto.createHash('sha256').update(amd64Config).digest('hex')}`;
-  const amd64Layer = Buffer.from('amd64-zot-layer-' + Date.now());
-  const amd64LayerDigest = `sha256:${crypto.createHash('sha256').update(amd64Layer).digest('hex')}`;
-
-  await zotClient.pushBlob(`${ZOT_MULTIARCH}:amd64`, amd64Config, amd64ConfigDigest);
-  await zotClient.pushBlob(`${ZOT_MULTIARCH}:amd64`, amd64Layer, amd64LayerDigest);
-
-  const amd64Manifest: ImageManifest = {
-    schemaVersion: 2,
-    mediaType: OCI_IMAGE_MEDIA_TYPE,
-    config: {
-      mediaType: IMAGE_CONFIG_MEDIA_TYPE,
-      digest: amd64ConfigDigest,
-      size: amd64Config.length,
-    },
-    layers: [
-      { mediaType: IMAGE_LAYER_MEDIA_TYPE, digest: amd64LayerDigest, size: amd64Layer.length },
-    ],
-  };
-  await zotClient.pushManifest(`${ZOT_MULTIARCH}:amd64`, {
-    manifestType: ManifestType.Image,
-    image: amd64Manifest,
-  });
-
-  // Push a minimal image for arm64
-  const arm64Config = Buffer.from(
-    JSON.stringify({
-      architecture: 'arm64',
-      os: 'linux',
-      config: {},
-      rootfs: { type: 'layers', diff_ids: [] },
-    }),
-  );
-  const arm64ConfigDigest = `sha256:${crypto.createHash('sha256').update(arm64Config).digest('hex')}`;
-  const arm64Layer = Buffer.from('arm64-zot-layer-' + Date.now());
-  const arm64LayerDigest = `sha256:${crypto.createHash('sha256').update(arm64Layer).digest('hex')}`;
-
-  await zotClient.pushBlob(`${ZOT_MULTIARCH}:arm64`, arm64Config, arm64ConfigDigest);
-  await zotClient.pushBlob(`${ZOT_MULTIARCH}:arm64`, arm64Layer, arm64LayerDigest);
-
-  const arm64Manifest: ImageManifest = {
-    schemaVersion: 2,
-    mediaType: OCI_IMAGE_MEDIA_TYPE,
-    config: {
-      mediaType: IMAGE_CONFIG_MEDIA_TYPE,
-      digest: arm64ConfigDigest,
-      size: arm64Config.length,
-    },
-    layers: [
-      { mediaType: IMAGE_LAYER_MEDIA_TYPE, digest: arm64LayerDigest, size: arm64Layer.length },
-    ],
-  };
-  await zotClient.pushManifest(`${ZOT_MULTIARCH}:arm64`, {
-    manifestType: ManifestType.Image,
-    image: arm64Manifest,
-  });
-
-  // Get exact digests and sizes for the index entries
-  const amd64Digest = await zotClient.fetchManifestDigest(
-    `${ZOT_MULTIARCH}:amd64`,
-    anonymousAuth(),
-  );
-  const arm64Digest = await zotClient.fetchManifestDigest(
-    `${ZOT_MULTIARCH}:arm64`,
-    anonymousAuth(),
-  );
-  const amd64Raw = await zotClient.pullManifestRaw(`${ZOT_MULTIARCH}:amd64`, anonymousAuth(), [
-    OCI_IMAGE_MEDIA_TYPE,
-  ]);
-  const arm64Raw = await zotClient.pullManifestRaw(`${ZOT_MULTIARCH}:arm64`, anonymousAuth(), [
-    OCI_IMAGE_MEDIA_TYPE,
-  ]);
-
-  // Push the Image Index
-  const index: ImageIndex = {
-    schemaVersion: 2,
-    mediaType: OCI_IMAGE_INDEX_MEDIA_TYPE,
-    manifests: [
-      {
-        mediaType: OCI_IMAGE_MEDIA_TYPE,
-        digest: amd64Digest,
-        size: amd64Raw.length,
-        platform: { architecture: 'amd64', os: 'linux' },
-      },
-      {
-        mediaType: OCI_IMAGE_MEDIA_TYPE,
-        digest: arm64Digest,
-        size: arm64Raw.length,
-        platform: { architecture: 'arm64', os: 'linux' },
-      },
-    ],
-  };
-  await zotClient.pushManifestList(`${ZOT_MULTIARCH}:multiarch`, anonymousAuth(), index);
-
-  // Pull back and verify platform fields survived the round-trip
   const pulled = await zotClient.pullManifest(`${ZOT_MULTIARCH}:multiarch`, anonymousAuth());
   t.is(pulled.manifest.manifestType, ManifestType.ImageIndex);
   const pulledIndex = pulled.manifest.imageIndex!;
@@ -1208,106 +1148,8 @@ zotTest(
   'pullImageManifest - should select correct platform from multi-arch image via Zot',
   async (t) => {
     const ZOT_MULTIARCH = zot.repo('test-multiarch-filter');
+    const { amd64Digest } = await pushMultiarchImage(zotClient, ZOT_MULTIARCH);
 
-    // Push amd64 image
-    const amd64Config = Buffer.from(
-      JSON.stringify({
-        architecture: 'amd64',
-        os: 'linux',
-        config: {},
-        rootfs: { type: 'layers', diff_ids: [] },
-      }),
-    );
-    const amd64ConfigDigest = `sha256:${crypto.createHash('sha256').update(amd64Config).digest('hex')}`;
-    const amd64Layer = Buffer.from('amd64-filter-layer-' + Date.now());
-    const amd64LayerDigest = `sha256:${crypto.createHash('sha256').update(amd64Layer).digest('hex')}`;
-
-    await zotClient.pushBlob(`${ZOT_MULTIARCH}:amd64`, amd64Config, amd64ConfigDigest);
-    await zotClient.pushBlob(`${ZOT_MULTIARCH}:amd64`, amd64Layer, amd64LayerDigest);
-    await zotClient.pushManifest(`${ZOT_MULTIARCH}:amd64`, {
-      manifestType: ManifestType.Image,
-      image: {
-        schemaVersion: 2,
-        mediaType: OCI_IMAGE_MEDIA_TYPE,
-        config: {
-          mediaType: IMAGE_CONFIG_MEDIA_TYPE,
-          digest: amd64ConfigDigest,
-          size: amd64Config.length,
-        },
-        layers: [
-          { mediaType: IMAGE_LAYER_MEDIA_TYPE, digest: amd64LayerDigest, size: amd64Layer.length },
-        ],
-      },
-    });
-
-    // Push arm64 image
-    const arm64Config = Buffer.from(
-      JSON.stringify({
-        architecture: 'arm64',
-        os: 'linux',
-        config: {},
-        rootfs: { type: 'layers', diff_ids: [] },
-      }),
-    );
-    const arm64ConfigDigest = `sha256:${crypto.createHash('sha256').update(arm64Config).digest('hex')}`;
-    const arm64Layer = Buffer.from('arm64-filter-layer-' + Date.now());
-    const arm64LayerDigest = `sha256:${crypto.createHash('sha256').update(arm64Layer).digest('hex')}`;
-
-    await zotClient.pushBlob(`${ZOT_MULTIARCH}:arm64`, arm64Config, arm64ConfigDigest);
-    await zotClient.pushBlob(`${ZOT_MULTIARCH}:arm64`, arm64Layer, arm64LayerDigest);
-    await zotClient.pushManifest(`${ZOT_MULTIARCH}:arm64`, {
-      manifestType: ManifestType.Image,
-      image: {
-        schemaVersion: 2,
-        mediaType: OCI_IMAGE_MEDIA_TYPE,
-        config: {
-          mediaType: IMAGE_CONFIG_MEDIA_TYPE,
-          digest: arm64ConfigDigest,
-          size: arm64Config.length,
-        },
-        layers: [
-          { mediaType: IMAGE_LAYER_MEDIA_TYPE, digest: arm64LayerDigest, size: arm64Layer.length },
-        ],
-      },
-    });
-
-    // Get exact digests and sizes
-    const amd64Digest = await zotClient.fetchManifestDigest(
-      `${ZOT_MULTIARCH}:amd64`,
-      anonymousAuth(),
-    );
-    const arm64Digest = await zotClient.fetchManifestDigest(
-      `${ZOT_MULTIARCH}:arm64`,
-      anonymousAuth(),
-    );
-    const amd64Raw = await zotClient.pullManifestRaw(`${ZOT_MULTIARCH}:amd64`, anonymousAuth(), [
-      OCI_IMAGE_MEDIA_TYPE,
-    ]);
-    const arm64Raw = await zotClient.pullManifestRaw(`${ZOT_MULTIARCH}:arm64`, anonymousAuth(), [
-      OCI_IMAGE_MEDIA_TYPE,
-    ]);
-
-    // Push Image Index
-    await zotClient.pushManifestList(`${ZOT_MULTIARCH}:multiarch`, anonymousAuth(), {
-      schemaVersion: 2,
-      mediaType: OCI_IMAGE_INDEX_MEDIA_TYPE,
-      manifests: [
-        {
-          mediaType: OCI_IMAGE_MEDIA_TYPE,
-          digest: amd64Digest,
-          size: amd64Raw.length,
-          platform: { architecture: 'amd64', os: 'linux' },
-        },
-        {
-          mediaType: OCI_IMAGE_MEDIA_TYPE,
-          digest: arm64Digest,
-          size: arm64Raw.length,
-          platform: { architecture: 'arm64', os: 'linux' },
-        },
-      ],
-    });
-
-    // Pull with platform filter -- this should select the amd64 manifest
     const platformClient = OciClient.withConfig({
       protocol: ClientProtocol.Http,
       platform: { os: 'linux', architecture: 'amd64' },
@@ -1522,6 +1364,71 @@ test.serial('ImageManifestNotFoundError - should expose image field', async (t) 
     t.is(ociErr.image, raw.image, 'fromOciError round-trip preserves image');
   }
 });
+
+// =============================================================================
+// Digest Mismatch Tests (using badManifest/badConfig/badBlob MockConfig flags)
+// =============================================================================
+
+test.serial('digest mismatch - bad manifest digest should throw', async (t) => {
+  const badRegistry = new MockRegistry({ badManifest: true });
+  await badRegistry.start();
+  t.teardown(() => badRegistry.stop());
+
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http });
+  await t.throwsAsync(client.pullManifest(`${badRegistry.address}/test:latest`, anonymousAuth()), {
+    message: /digest/i,
+  });
+});
+
+test.serial('digest mismatch - bad config digest should throw on pull', async (t) => {
+  const badRegistry = new MockRegistry({ badConfig: true });
+  await badRegistry.start();
+  t.teardown(() => badRegistry.stop());
+
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http });
+  await t.throwsAsync(
+    client.pull(`${badRegistry.address}/test:latest`, anonymousAuth(), [
+      'application/vnd.docker.image.rootfs.diff.tar.gzip',
+    ]),
+  );
+});
+
+test.serial('digest mismatch - bad blob digest should throw on pull', async (t) => {
+  const badRegistry = new MockRegistry({ badBlob: true });
+  await badRegistry.start();
+  t.teardown(() => badRegistry.stop());
+
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http });
+  await t.throwsAsync(
+    client.pull(`${badRegistry.address}/test:latest`, anonymousAuth(), [
+      'application/vnd.docker.image.rootfs.diff.tar.gzip',
+    ]),
+  );
+});
+
+// =============================================================================
+// Auth Validation Tests
+// =============================================================================
+
+test('RegistryAuth - Basic without username should fail', (t) => {
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http });
+  const badAuth: RegistryAuth = { authType: RegistryAuthType.Basic } as RegistryAuth;
+  t.throws(() => client.pullManifest('127.0.0.1:1/test:latest', badAuth), {
+    message: /username required/i,
+  });
+});
+
+test('RegistryAuth - Bearer without token should fail', (t) => {
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http });
+  const badAuth: RegistryAuth = { authType: RegistryAuthType.Bearer } as RegistryAuth;
+  t.throws(() => client.pullManifest('127.0.0.1:1/test:latest', badAuth), {
+    message: /token required/i,
+  });
+});
+
+// =============================================================================
+// Helpers
+// =============================================================================
 
 /**
  * Projects `actual` down to the shape of `template`.
