@@ -126,6 +126,49 @@ Create HTTP Basic authentication.
 
 Create Bearer token authentication.
 
+#### `storeAuth(registry, auth)`
+
+Pre-authenticate with a registry. Useful for storing credentials before performing multiple operations.
+
+#### How authentication works
+
+Some methods accept an `auth` parameter directly:
+
+- **Explicit auth:** `pull`, `push`, `pullImageManifest`, `pullManifest`, `pullManifestRaw`, `pushManifestList`, `listTags`, `fetchManifestDigest`, `catalog`, `pullImageManifestAndListDigest`, `pullManifestAndConfigAndListDigest`
+
+These methods call the native `store_auth_if_needed` internally, which stores the credentials for the registry if not already stored, then uses them for the request.
+
+Other methods do **not** accept an `auth` parameter and rely on credentials previously stored by one of the methods above (or by an explicit `storeAuth` call):
+
+- **Stored auth:** `pullBlob`, `pullBlobToFile`, `pushBlob`, `pushBlobFromFile`, `pushManifest`, `blobExists`, `mountBlob`, `pullReferrers`
+
+A typical workflow authenticates once, then performs multiple operations:
+
+```typescript
+// Authenticate — credentials are stored for this registry
+await client.storeAuth('registry.example.com', basicAuth('user', 'token'));
+
+// These all use the stored credentials
+await client.pushBlob('registry.example.com/repo:v1', layerData, layerDigest);
+await client.pushManifest('registry.example.com/repo:v1', manifest);
+const exists = await client.blobExists('registry.example.com/repo:v1', layerDigest);
+```
+
+Alternatively, the first call with explicit `auth` stores credentials automatically:
+
+```typescript
+// pullManifest stores auth for registry.example.com as a side effect
+const { manifest } = await client.pullManifest(
+  'registry.example.com/repo:v1',
+  basicAuth('user', 'token'),
+);
+
+// Subsequent calls to the same registry reuse the stored credentials
+const blob = await client.pullBlob('registry.example.com/repo:v1', layerDigest);
+```
+
+For anonymous registries, call `storeAuth` with `anonymousAuth()` or use any explicit-auth method first.
+
 ### Main Functions
 
 #### `pull(image, auth, acceptedMediaTypes)`
@@ -205,10 +248,6 @@ Like `pullImageManifest`, but also returns the digest of the parent manifest lis
 #### `pullManifestAndConfigAndListDigest(image, auth)`
 
 Pull a manifest, its config JSON, and the parent manifest list digest. Returns `{ manifest, digest, config, listDigest }`.
-
-#### `storeAuth(registry, auth)`
-
-Pre-authenticate with a registry. Useful for storing credentials before performing multiple operations.
 
 #### `close()`
 

@@ -736,6 +736,19 @@ pub struct PullManifestAndConfigAndListDigestResult {
 
 /// OCI Distribution client for interacting with OCI registries.
 /// Provides pull, push, and manifest operations.
+///
+/// # Authentication
+///
+/// Methods that accept an `auth` parameter (`pull`, `push`, `pull_image_manifest`,
+/// `pull_manifest`, `pull_manifest_raw`, `push_manifest_list`, `list_tags`,
+/// `fetch_manifest_digest`, `catalog`, `pull_image_manifest_and_list_digest`,
+/// `pull_manifest_and_config_and_list_digest`) store credentials internally via
+/// the native `store_auth_if_needed` and then use them for the request.
+///
+/// Methods without an `auth` parameter (`pull_blob`, `pull_blob_to_file`,
+/// `push_blob`, `push_blob_from_file`, `push_manifest`, `blob_exists`,
+/// `mount_blob`, `pull_referrers`) rely on credentials already stored by
+/// a prior explicit-auth call or by [`store_auth`](OciClient::store_auth).
 #[napi]
 pub struct OciClient {
     inner: parking_lot::Mutex<Option<Client>>,
@@ -971,7 +984,11 @@ impl OciClient {
     // ========================================================================
 
     /// Store authentication credentials for a registry.
-    /// This is useful for pre-authenticating before multiple operations.
+    ///
+    /// Wraps native `Client::store_auth_if_needed`: credentials are stored only
+    /// if the registry does not already have stored auth. Once stored, all
+    /// subsequent operations against the same registry (`pull_blob`, `push_blob`,
+    /// `push_manifest`, etc.) will use them automatically.
     #[napi]
     pub async fn store_auth(&self, registry: String, auth: RegistryAuth) -> Result<()> {
         let client = self.client()?;
