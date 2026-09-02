@@ -1371,6 +1371,7 @@ name = "oci-client-nodejs-bindings"
 version = "0.17.0"
 dependencies = [
  "bytes",
+ "futures-util",
  "napi",
  "napi-build",
  "napi-derive",
@@ -1383,6 +1384,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

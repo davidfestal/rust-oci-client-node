@@ -29,6 +29,8 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use error::oci_error;
+use futures_util::TryStreamExt;
+use tokio_util::io::ReaderStream;
 
 fn parse_reference(env: Env, value: &str) -> Result<Reference> {
     Reference::from_str(value).map_err(|e| oci_error(&env, e))
@@ -1103,6 +1105,70 @@ impl OciClient {
             },
             move |env, result| match result {
                 Ok(data) => Ok(Buffer::from(data)),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
+    }
+
+    /// Pull a blob from the registry and write it to `path`.
+    ///
+    /// The destination file is created or truncated. Bytes are copied from the
+    /// registry socket to disk and never enter a JavaScript `Buffer`. The
+    /// digest is verified when the write completes.
+    #[napi]
+    pub fn pull_blob_to_file(
+        &self,
+        env: Env,
+        image: String,
+        digest: String,
+        path: String,
+    ) -> Result<AsyncBlock<()>> {
+        let client = self.client()?;
+        let reference = parse_reference(env, &image)?;
+
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move {
+                Ok(match tokio::fs::File::create(&path).await {
+                    Ok(file) => client.pull_blob(&reference, digest.as_str(), file).await,
+                    Err(err) => Err(err.into()),
+                })
+            },
+            move |env, result| match result {
+                Ok(()) => Ok(()),
+                Err(err) => Err(oci_error(&env, err)),
+            },
+        )
+    }
+
+    /// Push a blob from a file at `path`.
+    ///
+    /// The file is streamed to the registry. `digest` must be the SHA-256
+    /// digest of the file contents (`sha256:<hex>`).
+    #[napi]
+    pub fn push_blob_from_file(
+        &self,
+        env: Env,
+        image: String,
+        path: String,
+        digest: String,
+    ) -> Result<AsyncBlock<String>> {
+        let client = self.client()?;
+        let reference = parse_reference(env, &image)?;
+
+        AsyncBlockBuilder::build_with_map(
+            &env,
+            async move {
+                Ok(match tokio::fs::File::open(&path).await {
+                    Ok(file) => {
+                        let stream = ReaderStream::new(file).map_err(OciDistributionError::from);
+                        client.push_blob_stream(&reference, stream, &digest).await
+                    }
+                    Err(err) => Err(err.into()),
+                })
+            },
+            move |env, result| match result {
+                Ok(url) => Ok(url),
                 Err(err) => Err(oci_error(&env, err)),
             },
         )

@@ -164,9 +164,19 @@ Pull referrers for an artifact (OCI 1.1 Referrers API). Returns `ImageIndex`.
 
 Pull a blob from the registry. Returns a `Buffer`.
 
+#### `pullBlobToFile(image, digest, path)`
+
+Pull a blob from the registry and write it to `path` (created or truncated). Bytes go from the registry socket to disk and never enter a JavaScript `Buffer`. The digest is verified when the write completes.
+
 #### `pushBlob(image, data, digest)`
 
 Push a blob to the registry. Returns the blob digest. Do not mutate `data` until the Promise settles (same contract as `fs.write` / `socket.write`).
+
+#### `pushBlobFromFile(image, path, digest)`
+
+Push a blob from a file at `path`. The file is streamed to the registry. `digest` must be `sha256:` followed by the hex SHA-256 of the file contents.
+
+To pull or push a full image without buffering layers in V8, compose these with the manifest APIs: `pullManifest` then `pullBlobToFile` for the config and each layer; or `pushBlobFromFile` for large layers, `pushBlob` for small configs, then `pushManifest`. There is no image-level `pullToDir` / `pushFromDir`. Sources that are not already files should write a temp file first, then call `pushBlobFromFile`.
 
 #### `blobExists(image, digest)`
 

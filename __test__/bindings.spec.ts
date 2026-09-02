@@ -11,6 +11,11 @@
 import test from 'ava';
 import type { ExecutionContext } from 'ava';
 import * as crypto from 'crypto';
+import { createReadStream } from 'fs';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
+import { pipeline } from 'stream/promises';
 import {
   OciClient,
   anonymousAuth,
@@ -58,6 +63,13 @@ import {
   IMAGE_INDEX_DIGEST,
 } from './mock-registry.js';
 import { ZotRegistry, shouldSkipZotTests } from './zot-registry.js';
+
+/** SHA-256 digest of a file on disk (`sha256:<hex>`), without loading the whole blob into a Buffer. */
+async function sha256File(filePath: string): Promise<string> {
+  const hash = crypto.createHash('sha256');
+  await pipeline(createReadStream(filePath), hash);
+  return `sha256:${hash.digest('hex')}`;
+}
 
 // =============================================================================
 // Authentication Tests
@@ -466,6 +478,74 @@ test.serial('pullBlob - should pull layer blob by digest', async (t) => {
   t.true(layerData.length > 0);
 });
 
+test.serial(
+  'pullBlobToFile - should pull config blob to a file with matching digest',
+  async (t) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'oci-client-pull-'));
+    t.teardown(() => rm(dir, { recursive: true, force: true }));
+    const dest = path.join(dir, 'config.json');
+
+    await mockClient.pullBlobToFile(`${MOCK_REGISTRY}/test:latest`, CONFIG_DIGEST, dest);
+
+    t.is(await sha256File(dest), CONFIG_DIGEST);
+  },
+);
+
+test.serial('pullBlobToFile - should pull layer blob to a file with matching digest', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'oci-client-pull-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const dest = path.join(dir, 'blob.tar.gz');
+
+  await mockClient.pullBlobToFile(`${MOCK_REGISTRY}/test:latest`, BLOB_DIGEST, dest);
+
+  t.is(await sha256File(dest), BLOB_DIGEST);
+});
+
+test.serial('pullBlobToFile - should throw for a non-existent blob', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'oci-client-pull-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const dest = path.join(dir, 'missing.bin');
+
+  await t.throwsAsync(
+    mockClient.pullBlobToFile(
+      `${MOCK_REGISTRY}/test:latest`,
+      'sha256:nonexistent0000000000000000000000000000000000000000000000000000',
+      dest,
+    ),
+  );
+});
+
+test.serial(
+  'pullBlobToFile - should throw IoError when the destination directory does not exist',
+  async (t) => {
+    const dest = path.join(os.tmpdir(), 'oci-client-missing-dir', 'nope', 'blob.bin');
+    const err = await t.throwsAsync(
+      mockClient.pullBlobToFile(`${MOCK_REGISTRY}/test:latest`, CONFIG_DIGEST, dest),
+    );
+
+    t.truthy(err);
+    const ociErr = fromOciError(err!);
+    t.is(ociErr.type, 'IoError');
+  },
+);
+
+test.serial(
+  'pushBlobFromFile - should throw IoError when the source file does not exist',
+  async (t) => {
+    const err = await t.throwsAsync(
+      mockClient.pushBlobFromFile(
+        `${MOCK_REGISTRY}/test:latest`,
+        path.join(os.tmpdir(), 'oci-client-no-such-file.bin'),
+        CONFIG_DIGEST,
+      ),
+    );
+
+    t.truthy(err);
+    const ociErr = fromOciError(err!);
+    t.is(ociErr.type, 'IoError');
+  },
+);
+
 test.serial('blobExists - should return true for existing blob', async (t) => {
   const exists = await mockClient.blobExists(`${MOCK_REGISTRY}/test:latest`, CONFIG_DIGEST);
   t.true(exists);
@@ -858,6 +938,37 @@ zotTest('pushBlob - should pull back the pushed blob with same content', async (
   t.true(pulledData instanceof Buffer);
   t.is(pulledData.toString(), originalData.toString());
   t.is(pulledData.length, originalData.length);
+});
+
+zotTest('pushBlobFromFile - should push a blob from a file', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'oci-client-push-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const src = path.join(dir, 'blob.bin');
+  await writeFile(src, `file-io push ${Date.now()}`);
+  const digest = await sha256File(src);
+
+  const result = await zotClient.pushBlobFromFile(`${ZOT_REPO}:file-io`, src, digest);
+
+  t.truthy(result);
+  t.true(result.includes(digest));
+
+  const exists = await zotClient.blobExists(`${ZOT_REPO}:file-io`, digest);
+  t.true(exists);
+});
+
+zotTest('pushBlobFromFile - should round-trip to a file with the same digest', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'oci-client-push-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const src = path.join(dir, 'src.bin');
+  const dest = path.join(dir, 'dest.bin');
+  await writeFile(src, `round-trip file blob ${Date.now()}`);
+  const digest = await sha256File(src);
+
+  await zotClient.pushBlobFromFile(`${ZOT_REPO}:file-io`, src, digest);
+  await zotClient.pullBlobToFile(`${ZOT_REPO}:file-io`, digest, dest);
+
+  t.is(await sha256File(dest), digest);
+  t.is(await sha256File(dest), await sha256File(src));
 });
 
 zotTest('pushManifest - should push a simple OCI image manifest', async (t) => {
