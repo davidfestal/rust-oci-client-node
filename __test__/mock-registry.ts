@@ -27,13 +27,21 @@ function sha256digest(buf: Buffer): string {
 // ---------------------------------------------------------------------------
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
-const MANIFEST = fs.readFileSync(path.join(FIXTURES_DIR, 'manifest.json'));
 const CONFIG = fs.readFileSync(path.join(FIXTURES_DIR, 'config.json'));
 const BLOB = fs.readFileSync(path.join(FIXTURES_DIR, 'blob.tar.gz'));
 
-export const MANIFEST_DIGEST = sha256digest(MANIFEST);
 export const CONFIG_DIGEST = sha256digest(CONFIG);
 export const BLOB_DIGEST = sha256digest(BLOB);
+
+// Load manifest base and dynamically align digests and sizes to match current fixture bytes in memory
+const manifestObj = JSON.parse(fs.readFileSync(path.join(FIXTURES_DIR, 'manifest.json'), 'utf8'));
+manifestObj.config.digest = CONFIG_DIGEST;
+manifestObj.config.size = CONFIG.length;
+manifestObj.layers[0].digest = BLOB_DIGEST;
+manifestObj.layers[0].size = BLOB.length;
+
+const MANIFEST = Buffer.from(JSON.stringify(manifestObj));
+export const MANIFEST_DIGEST = sha256digest(MANIFEST);
 
 // ---------------------------------------------------------------------------
 // Multi-arch fixtures: two platform-specific images (linux/amd64, linux/arm64)
