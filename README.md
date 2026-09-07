@@ -1,3 +1,313 @@
-# rust-oci-client-node
+# Node.js Bindings for rust-oci-client
 
-[rust-oci-client](https://github.com/oras-project/rust-oci-client) NodeJS Javascript bindings.
+Node.js bindings for the [rust-oci-client](https://github.com/oras-project/rust-oci-client) library, providing high-performance OCI Distribution client functionality.
+
+**Version**: These bindings are versioned in sync with the parent `oci-client` crate.
+
+## Features
+
+- **High Performance**: Native Rust via NAPI-RS; binary data uses Node.js `Buffer`
+- **Full Auth Support**: Anonymous, Basic (username/password), and Bearer token authentication
+- **Complete ClientConfig**: All native configuration options exposed
+- **Multi-Platform Images**: Built-in platform resolution for Image Index manifests
+- **TypeScript Support**: Full type definitions included (see [index.d.ts](./index.d.ts))
+
+## Installation
+
+```bash
+npm install @oras-project/oci-client
+# or
+yarn add @oras-project/oci-client
+```
+
+## Usage
+
+```typescript
+import { OciClient, ClientProtocol, anonymousAuth, basicAuth } from '@oras-project/oci-client';
+
+// Create a client with default configuration
+const client = new OciClient();
+
+// Or with custom configuration
+const clientWithConfig = OciClient.withConfig({
+  protocol: ClientProtocol.Https,
+  acceptInvalidCertificates: false,
+  maxConcurrentDownload: 8,
+  maxConcurrentUpload: 8,
+});
+
+// Create a client targeting a specific platform (for multi-arch images)
+const armClient = OciClient.withConfig({
+  platform: {
+    os: 'linux',
+    architecture: 'arm64',
+    variant: 'v8', // optional
+  },
+});
+
+// Pull an image
+const imageData = await client.pull('ghcr.io/example/image:latest', anonymousAuth(), [
+  'application/vnd.oci.image.layer.v1.tar+gzip',
+]);
+
+console.log(`Pulled ${imageData.layers.length} layers`);
+console.log(`Digest: ${imageData.digest}`);
+
+// Push an image
+const response = await client.push(
+  'registry.example.com/myimage:v1',
+  layers,
+  config,
+  basicAuth('username', 'password'),
+  undefined, // Let the client generate the manifest
+);
+
+console.log(`Manifest URL: ${response.manifestUrl}`);
+
+// Pull image manifest
+const { manifest, digest } = await client.pullImageManifest(
+  'ghcr.io/example/image:latest',
+  anonymousAuth(),
+);
+
+// Push a manifest list (multi-platform image)
+const manifestUrl = await client.pushManifestList(
+  'registry.example.com/myimage:v1',
+  basicAuth('username', 'password'),
+  imageIndex,
+);
+
+// Pull referrers (OCI 1.1)
+const referrers = await client.pullReferrers(
+  'ghcr.io/example/image@sha256:abc123...',
+  'application/vnd.example.sbom',
+);
+```
+
+## API Reference
+
+### Client
+
+#### `new OciClient()`
+
+Create a client with default configuration.
+
+#### `OciClient.withConfig(config: ClientConfig)`
+
+Create a client with custom configuration.
+
+### Platform Selection
+
+For multi-platform images (Image Index/Manifest List), you can specify the target platform:
+
+```typescript
+const client = OciClient.withConfig({
+  platform: {
+    os: 'linux', // Required: linux, windows, darwin, etc.
+    architecture: 'arm64', // Required: amd64, arm64, arm, etc.
+    variant: 'v8', // Optional: v7, v8, etc. for ARM
+  },
+});
+```
+
+When pulling an image that references an Image Index, the client will automatically select the manifest matching the specified platform.
+
+### Authentication
+
+#### `anonymousAuth()`
+
+Create anonymous authentication.
+
+#### `basicAuth(username: string, password: string)`
+
+Create HTTP Basic authentication.
+
+#### `bearerAuth(token: string)`
+
+Create Bearer token authentication.
+
+#### `storeAuth(registry, auth)`
+
+Pre-authenticate with a registry. Useful for storing credentials before performing multiple operations.
+
+#### How authentication works
+
+Some methods accept an `auth` parameter directly:
+
+- **Explicit auth:** `pull`, `push`, `pullImageManifest`, `pullManifest`, `pullManifestRaw`, `pushManifestList`, `listTags`, `fetchManifestDigest`, `catalog`, `pullImageManifestAndListDigest`, `pullManifestAndConfigAndListDigest`
+
+These methods call the native `store_auth_if_needed` internally, which stores the credentials for the registry if not already stored, then uses them for the request.
+
+Other methods do **not** accept an `auth` parameter and rely on credentials previously stored by one of the methods above (or by an explicit `storeAuth` call):
+
+- **Stored auth:** `pullBlob`, `pullBlobToFile`, `pushBlob`, `pushBlobFromFile`, `pushManifest`, `blobExists`, `mountBlob`, `pullReferrers`
+
+A typical workflow authenticates once, then performs multiple operations:
+
+```typescript
+// Authenticate — credentials are stored for this registry
+await client.storeAuth('registry.example.com', basicAuth('user', 'token'));
+
+// These all use the stored credentials
+await client.pushBlob('registry.example.com/repo:v1', layerData, layerDigest);
+await client.pushManifest('registry.example.com/repo:v1', manifest);
+const exists = await client.blobExists('registry.example.com/repo:v1', layerDigest);
+```
+
+Alternatively, the first call with explicit `auth` stores credentials automatically:
+
+```typescript
+// pullManifest stores auth for registry.example.com as a side effect
+const { manifest } = await client.pullManifest(
+  'registry.example.com/repo:v1',
+  basicAuth('user', 'token'),
+);
+
+// Subsequent calls to the same registry reuse the stored credentials
+const blob = await client.pullBlob('registry.example.com/repo:v1', layerDigest);
+```
+
+For anonymous registries, call `storeAuth` with `anonymousAuth()` or use any explicit-auth method first.
+
+### Main Functions
+
+#### `pull(image, auth, acceptedMediaTypes)`
+
+Pull an image from the registry. Returns `ImageData` with layers as Buffers.
+
+#### `push(imageRef, layers, config, auth, manifest?)`
+
+Push an image to the registry. Returns `PushResponse`. Do not mutate layer or config `Buffer`s until the Promise settles (same contract as `fs.write` / `socket.write`).
+
+#### `pullImageManifest(image, auth)`
+
+Pull an image manifest. Returns `{ manifest, digest }`. If a multi-platform Image Index is encountered, automatically selects the platform-specific manifest.
+
+#### `pullManifest(image, auth)`
+
+Pull a manifest (either image or image index) from the registry. Returns `{ manifest, digest }`.
+
+#### `pullManifestRaw(image, auth, acceptedMediaTypes)`
+
+Pull a manifest as raw bytes. Returns a `Buffer`.
+
+#### `pushManifest(image, manifest)`
+
+Push a manifest (image or image index) to the registry. Returns the manifest URL.
+
+#### `pushManifestList(reference, auth, manifest)`
+
+Push a manifest list (image index). Returns manifest URL.
+
+#### `pullReferrers(image, artifactType?)`
+
+Pull referrers for an artifact (OCI 1.1 Referrers API). Returns `ImageIndex`.
+
+#### `pullBlob(image, digest)`
+
+Pull a blob from the registry. Returns a `Buffer`.
+
+#### `pullBlobToFile(image, digest, path)`
+
+Pull a blob from the registry and write it to `path` (created or truncated). Bytes go from the registry socket to disk and never enter a JavaScript `Buffer`. The digest is verified when the write completes.
+
+#### `pushBlob(image, data, digest)`
+
+Push a blob to the registry. Returns the blob digest. Do not mutate `data` until the Promise settles (same contract as `fs.write` / `socket.write`).
+
+#### `pushBlobFromFile(image, path, digest)`
+
+Push a blob from a file at `path`. The file is streamed to the registry. `digest` must be `sha256:` followed by the hex SHA-256 of the file contents.
+
+To pull or push a full image without buffering layers in V8, compose these with the manifest APIs: `pullManifest` then `pullBlobToFile` for the config and each layer; or `pushBlobFromFile` for large layers, `pushBlob` for small configs, then `pushManifest`. There is no image-level `pullToDir` / `pushFromDir`. Sources that are not already files should write a temp file first, then call `pushBlobFromFile`.
+
+#### `blobExists(image, digest)`
+
+Check if a blob exists in the registry. Returns `boolean`.
+
+#### `mountBlob(target, source, digest)`
+
+Mount a blob from one repository to another (cross-repository blob mounting).
+
+#### `listTags(image, auth, n?, last?)`
+
+List tags for a repository. Supports pagination via `n` (page size) and `last` (last tag from previous page). Returns `string[]`.
+
+#### `fetchManifestDigest(image, auth)`
+
+Fetch a manifest's digest without downloading the full manifest content. Returns the digest string.
+
+#### `catalog(image, auth, n?, last?)`
+
+List available repositories in the registry (OCI Distribution Spec `/v2/_catalog`). Supports pagination via `n` (page size) and `last` (last repo from previous page). Returns `string[]`.
+
+#### `pullImageManifestAndListDigest(image, auth)`
+
+Like `pullImageManifest`, but also returns the digest of the parent manifest list/image index when the resolved manifest came from one. Returns `{ manifest, digest, listDigest }`.
+
+#### `pullManifestAndConfigAndListDigest(image, auth)`
+
+Pull a manifest, its config JSON, and the parent manifest list digest. Returns `{ manifest, digest, config, listDigest }`.
+
+#### `close()`
+
+Explicitly release the underlying connection pool. Idempotent — returns `true` on first call, `false` on subsequent calls. After `close()`, all method calls will throw `"Client is closed"`.
+
+### Types
+
+See the TypeScript definitions for complete type information.
+
+## Building from Source
+
+```bash
+# Install dependencies
+yarn install
+
+# Build native module (release)
+yarn build
+
+# Build debug version
+yarn build:debug
+
+# Run tests
+yarn test
+
+# Lint
+yarn lint
+```
+
+## TLS
+
+These bindings default to the **`native-tls`** backend (OpenSSL on Linux, Secure Transport on macOS,
+SChannel on Windows), unlike the parent `oci-client` crate which defaults to `rustls-tls`. The
+reason is cross-compilation: the prebuilt binaries cover nine target triples including musl and
+s390x, and `native-tls` with vendored OpenSSL (`native-tls-vendored` feature) produces
+self-contained binaries on all of them without requiring a system Rust toolchain or OpenSSL headers
+at runtime.
+
+If you build from source and prefer a pure-Rust TLS stack, you can enable the `rustls-tls` feature
+instead:
+
+```bash
+yarn napi build --platform --release --no-default-features --features rustls-tls
+```
+
+## Supported Platforms
+
+- Windows x64 (MSVC)
+- macOS x64 (Intel)
+- macOS ARM64 (Apple Silicon)
+- Linux x64 (glibc)
+- Linux ARM64 (glibc)
+- Linux x64 (musl/Alpine)
+- Linux ARM64 (musl/Alpine)
+- Linux s390x (glibc)
+- Linux ppc64le (glibc)
+
+## Contributing
+
+See the [CONTRIBUTING.md](./CONTRIBUTING.md) file for contribution guidelines.
+
+## License
+
+Apache-2.0

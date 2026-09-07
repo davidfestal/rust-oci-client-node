@@ -1,0 +1,40 @@
+name: Node.js Bindings Build and Test
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'testing/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'package.json'
+      - 'scripts/**'
+      - '__test__/**'
+      - '.github/workflows/nodejs-build-call.yml'
+      - '.github/workflows/nodejs-build.yml'
+      - 'deny.toml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'testing/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'package.json'
+      - 'scripts/**'
+      - '__test__/**'
+      - '.github/workflows/nodejs-build-call.yml'
+      - '.github/workflows/nodejs-build.yml'
+      - 'deny.toml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    uses: ./.github/workflows/nodejs-build-call.yml

@@ -1,0 +1,49 @@
+[package]
+name = "oci-client-nodejs-bindings"
+version = "0.17.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Node.js bindings for rust-oci-client"
+repository = "https://github.com/oras-project/rust-oci-client-node"
+homepage = "https://github.com/oras-project/rust-oci-client-node"
+readme = "README.md"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = ["native-tls"]
+native-tls = ["oci-client/native-tls"]
+rustls-tls = ["oci-client/rustls-tls"]
+# Vendored OpenSSL for cross-compiled Linux targets where system OpenSSL isn't available
+native-tls-vendored = ["oci-client/native-tls", "openssl/vendored"]
+
+[dependencies]
+napi = { version = "3", default-features = false, features = [
+  "async",
+  "napi4",
+  "tokio_rt",
+  "serde-json",
+] }
+napi-derive = "3"
+
+oci-client = { version = "0.17", default-features = false }
+
+bytes = "1"
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
+
+parking_lot = "0.12"
+
+oci-spec = "0.9"
+
+tokio = { version = "1", features = ["full"] }
+
+openssl = { version = "0.10", optional = true }
+serde_json = "1.0.151"
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.20"
+regex = "1.13.1"
+
+[build-dependencies]
+napi-build = "2"

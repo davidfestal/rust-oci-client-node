@@ -1,0 +1,1495 @@
+/**
+ * Tests for the Node.js bindings of rust-oci-client
+ *
+ * These tests validate that the NAPI bindings work correctly and produce
+ * the same results as the native Rust implementation.
+ *
+ * Pull tests use a mock OCI registry server (no Docker Hub, no rate limits).
+ * Push tests use a Zot registry container (requires Docker or Podman).
+ */
+
+import test from 'ava';
+import type { ExecutionContext } from 'ava';
+import * as crypto from 'crypto';
+import { createReadStream } from 'fs';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
+import { pipeline } from 'stream/promises';
+import {
+  OciClient,
+  anonymousAuth,
+  basicAuth,
+  bearerAuth,
+  fromOciError,
+  RegistryAuthType,
+  ClientProtocol,
+  CertificateEncoding,
+  ManifestType,
+  OciErrorCode,
+  // Media type constants
+  IMAGE_LAYER_MEDIA_TYPE,
+  IMAGE_LAYER_GZIP_MEDIA_TYPE,
+  IMAGE_CONFIG_MEDIA_TYPE,
+  IMAGE_DOCKER_LAYER_GZIP_MEDIA_TYPE,
+  OCI_IMAGE_MEDIA_TYPE,
+  OCI_IMAGE_INDEX_MEDIA_TYPE,
+  // Annotation constants
+  ORG_OPENCONTAINERS_IMAGE_TITLE,
+  ORG_OPENCONTAINERS_IMAGE_CREATED,
+  ORG_OPENCONTAINERS_IMAGE_REF_NAME,
+  // Types
+  type RegistryAuth,
+  type ClientConfig,
+  type ImageLayer,
+  type Config,
+  type ImageData,
+  type ImageManifest,
+  type ImageIndex,
+  type Descriptor,
+  type PlatformSpec,
+  type Manifest,
+  type PullImageManifestAndListDigestResult,
+  type PullManifestAndConfigAndListDigestResult,
+} from '../index.js';
+import {
+  MockRegistry,
+  generateTlsCerts,
+  MANIFEST_DIGEST,
+  CONFIG_DIGEST,
+  BLOB_DIGEST,
+  AMD64_MANIFEST_DIGEST,
+  ARM64_MANIFEST_DIGEST,
+  IMAGE_INDEX_DIGEST,
+  ZotRegistry,
+  shouldSkipZotTests,
+} from '@oras-project/oci-client-testing';
+import { pushMultiarchImage } from './helpers.js';
+
+/** SHA-256 digest of a file on disk (`sha256:<hex>`), without loading the whole blob into a Buffer. */
+async function sha256File(filePath: string): Promise<string> {
+  const hash = crypto.createHash('sha256');
+  await pipeline(createReadStream(filePath), hash);
+  return `sha256:${hash.digest('hex')}`;
+}
+
+// =============================================================================
+// Authentication Tests
+// =============================================================================
+
+test('anonymousAuth - should create anonymous auth object', (t) => {
+  const auth: RegistryAuth = anonymousAuth();
+  t.truthy(auth);
+  t.is(auth.authType, RegistryAuthType.Anonymous);
+  t.is(auth.username, undefined);
+  t.is(auth.password, undefined);
+  t.is(auth.token, undefined);
+});
+
+test('basicAuth - should create basic auth object with credentials', (t) => {
+  const auth: RegistryAuth = basicAuth('testuser', 'testpass');
+  t.truthy(auth);
+  t.is(auth.authType, RegistryAuthType.Basic);
+  t.is(auth.username, 'testuser');
+  t.is(auth.password, 'testpass');
+  t.is(auth.token, undefined);
+});
+
+test('basicAuth - should handle empty credentials', (t) => {
+  const auth: RegistryAuth = basicAuth('', '');
+  t.is(auth.authType, RegistryAuthType.Basic);
+  t.is(auth.username, '');
+  t.is(auth.password, '');
+});
+
+test('bearerAuth - should create bearer auth object with token', (t) => {
+  const auth: RegistryAuth = bearerAuth('my-secret-token');
+  t.truthy(auth);
+  t.is(auth.authType, RegistryAuthType.Bearer);
+  t.is(auth.token, 'my-secret-token');
+  t.is(auth.username, undefined);
+  t.is(auth.password, undefined);
+});
+
+// =============================================================================
+// OciClient Tests
+// =============================================================================
+
+test('OciClient - should create client with default configuration', (t) => {
+  const client = new OciClient();
+  t.truthy(client);
+  t.true(client instanceof OciClient);
+});
+
+test('OciClient.withConfig - should create client with custom protocol (Http)', (t) => {
+  const client = OciClient.withConfig({
+    protocol: ClientProtocol.Http,
+  });
+  t.truthy(client);
+  t.true(client instanceof OciClient);
+});
+
+test('OciClient.withConfig - should create client with custom protocol (Https)', (t) => {
+  const client = OciClient.withConfig({
+    protocol: ClientProtocol.Https,
+  });
+  t.truthy(client);
+});
+
+test('OciClient.withConfig - should create client with HttpsExcept protocol', (t) => {
+  const client = OciClient.withConfig({
+    protocol: ClientProtocol.HttpsExcept,
+    httpsExceptRegistries: ['localhost:5000', '127.0.0.1:5000'],
+  });
+  t.truthy(client);
+});
+
+test('OciClient.withConfig - should create client with accept invalid certificates', (t) => {
+  const client = OciClient.withConfig({
+    acceptInvalidCertificates: true,
+  });
+  t.truthy(client);
+});
+
+test('OciClient.withConfig - should create client with concurrency settings', (t) => {
+  const client = OciClient.withConfig({
+    maxConcurrentUpload: 4,
+    maxConcurrentDownload: 8,
+  });
+  t.truthy(client);
+});
+
+test('OciClient.withConfig - should create client with timeout settings', (t) => {
+  const client = OciClient.withConfig({
+    readTimeoutMs: 30000,
+    connectTimeoutMs: 10000,
+  });
+  t.truthy(client);
+});
+
+test('OciClient.withConfig - should create client with proxy settings', (t) => {
+  const client = OciClient.withConfig({
+    httpsProxy: 'http://proxy.example.com:8080',
+    httpProxy: 'http://proxy.example.com:8080',
+    noProxy: 'localhost,127.0.0.1',
+  });
+  t.truthy(client);
+});
+
+test('OciClient.withConfig - should create client with all settings combined', (t) => {
+  const config: ClientConfig = {
+    protocol: ClientProtocol.Https,
+    acceptInvalidCertificates: false,
+    useMonolithicPush: false,
+    maxConcurrentUpload: 8,
+    maxConcurrentDownload: 16,
+    defaultTokenExpirationSecs: 300,
+    readTimeoutMs: 60000,
+    connectTimeoutMs: 15000,
+  };
+  const client = OciClient.withConfig(config);
+  t.truthy(client);
+});
+
+test('OciClient.withConfig - should create client with custom certificates', async (t) => {
+  const tlsCerts = await generateTlsCerts();
+
+  const config: ClientConfig = {
+    protocol: ClientProtocol.Https,
+    extraRootCertificates: [
+      {
+        encoding: CertificateEncoding.Pem,
+        data: tlsCerts.caCert,
+      },
+    ],
+  };
+  const client = OciClient.withConfig(config);
+  t.truthy(client);
+});
+
+test('OciClient.withConfig - should create client with tlsCertsOnly', async (t) => {
+  const tlsCerts = await generateTlsCerts();
+
+  const config: ClientConfig = {
+    protocol: ClientProtocol.Https,
+    tlsCertsOnly: [
+      {
+        encoding: CertificateEncoding.Pem,
+        data: tlsCerts.caCert,
+      },
+    ],
+  };
+  const client = OciClient.withConfig(config);
+  t.truthy(client);
+});
+
+test('OciClient.withConfig - should not silently accept invalid certificate data', (t) => {
+  // native-tls rejects at construction; rustls defers to connection time.
+  let client: OciClient | undefined;
+  try {
+    client = OciClient.withConfig({
+      protocol: ClientProtocol.Https,
+      tlsCertsOnly: [
+        {
+          encoding: CertificateEncoding.Pem,
+          data: Buffer.from('this is not a valid PEM certificate'),
+        },
+      ],
+    });
+    // rustls: no valid roots loaded; connection-time failure is covered
+    // by "TLS - should fail without CA cert".
+    t.pass();
+  } catch (e: unknown) {
+    const err = e as Error & { type?: string };
+    t.is(err.type, 'RequestError');
+    t.is(err.message, 'builder error');
+    enhancedDeepEqual(t, err.cause, {
+      type: /^(Error|Os|Normal)$/,
+      message: (val: unknown) =>
+        typeof val === 'string' &&
+        (val.match(/^The data is invalid./i) ||
+          val == 'Unknown format in import.' ||
+          val.match(
+            /error:.+:PEM routines:.+:no start line:crypto\/pem\/pem_lib\.c:.+:Expecting: CERTIFICATE/,
+          )),
+      parsed: (val: unknown) => typeof val === 'object' && val !== null,
+    });
+  } finally {
+    client?.close();
+  }
+});
+
+// =============================================================================
+// Close Tests
+// =============================================================================
+
+test('close - should release the client and prevent further operations', (t) => {
+  const client = new OciClient();
+  t.is(client.close(), true, 'first close returns true');
+  t.is(client.close(), false, 'second close returns false (idempotent)');
+  t.throws(() => client.pull('localhost:5000/test:latest', anonymousAuth(), []), {
+    message: /Client is closed/,
+  });
+});
+
+// =============================================================================
+// Type Structure Tests
+// =============================================================================
+
+test('ImageLayer - should accept valid ImageLayer structure', (t) => {
+  const layer: ImageLayer = {
+    data: Buffer.from('test data'),
+    mediaType: IMAGE_LAYER_GZIP_MEDIA_TYPE,
+    annotations: { [ORG_OPENCONTAINERS_IMAGE_TITLE]: 'layer.tar.gz' },
+  };
+  t.true(layer.data instanceof Buffer);
+  t.is(layer.mediaType, IMAGE_LAYER_GZIP_MEDIA_TYPE);
+  t.truthy(layer.annotations);
+});
+
+test('ImageLayer - should accept ImageLayer without annotations', (t) => {
+  const layer: ImageLayer = {
+    data: Buffer.from('test'),
+    mediaType: IMAGE_LAYER_MEDIA_TYPE,
+  };
+  t.is(layer.annotations, undefined);
+});
+
+test('Config - should accept valid Config structure', (t) => {
+  const config: Config = {
+    data: Buffer.from('{}'),
+    mediaType: IMAGE_CONFIG_MEDIA_TYPE,
+    annotations: { 'custom.annotation': 'value' },
+  };
+  t.true(config.data instanceof Buffer);
+  t.is(config.mediaType, IMAGE_CONFIG_MEDIA_TYPE);
+});
+
+test('Descriptor - should accept valid Descriptor structure', (t) => {
+  const descriptor: Descriptor = {
+    mediaType: IMAGE_LAYER_GZIP_MEDIA_TYPE,
+    digest: 'sha256:abc123def456',
+    size: 1024,
+    urls: ['https://example.com/blob'],
+    annotations: { [ORG_OPENCONTAINERS_IMAGE_TITLE]: 'test' },
+  };
+  t.truthy(descriptor.mediaType);
+  t.truthy(descriptor.digest);
+  t.is(descriptor.size, 1024);
+});
+
+test('Descriptor - should accept minimal Descriptor', (t) => {
+  const descriptor: Descriptor = {
+    mediaType: IMAGE_LAYER_MEDIA_TYPE,
+    digest: 'sha256:abc',
+    size: 0,
+  };
+  t.is(descriptor.urls, undefined);
+  t.is(descriptor.annotations, undefined);
+});
+
+test('PlatformSpec - should accept full PlatformSpec', (t) => {
+  const platform: PlatformSpec = {
+    architecture: 'amd64',
+    os: 'linux',
+    osVersion: '5.4.0',
+    osFeatures: ['sse4'],
+    variant: 'v8',
+    features: ['avx'],
+  };
+  t.is(platform.architecture, 'amd64');
+  t.is(platform.os, 'linux');
+});
+
+test('PlatformSpec - should accept minimal PlatformSpec', (t) => {
+  const platform: PlatformSpec = {
+    architecture: 'arm64',
+    os: 'darwin',
+  };
+  t.is(platform.osVersion, undefined);
+});
+
+test('ImageManifest - should accept valid ImageManifest structure', (t) => {
+  const manifest: ImageManifest = {
+    schemaVersion: 2,
+    mediaType: OCI_IMAGE_MEDIA_TYPE,
+    config: {
+      mediaType: IMAGE_CONFIG_MEDIA_TYPE,
+      digest: 'sha256:config123',
+      size: 512,
+    },
+    layers: [
+      {
+        mediaType: IMAGE_LAYER_GZIP_MEDIA_TYPE,
+        digest: 'sha256:layer123',
+        size: 2048,
+      },
+    ],
+    artifactType: 'application/vnd.example.artifact',
+    annotations: { [ORG_OPENCONTAINERS_IMAGE_CREATED]: '2024-01-01T00:00:00Z' },
+  };
+  t.is(manifest.schemaVersion, 2);
+  t.is(manifest.config.digest, 'sha256:config123');
+  t.is(manifest.layers.length, 1);
+});
+
+test('ImageIndex - should accept valid ImageIndex structure', (t) => {
+  const index: ImageIndex = {
+    schemaVersion: 2,
+    mediaType: OCI_IMAGE_INDEX_MEDIA_TYPE,
+    manifests: [
+      {
+        mediaType: OCI_IMAGE_MEDIA_TYPE,
+        digest: 'sha256:manifest123',
+        size: 1024,
+        platform: {
+          architecture: 'amd64',
+          os: 'linux',
+        },
+      },
+      {
+        mediaType: OCI_IMAGE_MEDIA_TYPE,
+        digest: 'sha256:manifest456',
+        size: 1024,
+        platform: {
+          architecture: 'arm64',
+          os: 'linux',
+        },
+      },
+    ],
+    annotations: { [ORG_OPENCONTAINERS_IMAGE_REF_NAME]: 'latest' },
+  };
+  t.is(index.schemaVersion, 2);
+  t.is(index.manifests.length, 2);
+});
+
+// =============================================================================
+// Registry Operations using Mock Server
+// =============================================================================
+
+let mockRegistry: MockRegistry;
+let mockClient: OciClient;
+let MOCK_REGISTRY: string;
+
+test.before(async () => {
+  mockRegistry = new MockRegistry();
+  await mockRegistry.start();
+  MOCK_REGISTRY = mockRegistry.address;
+  mockClient = OciClient.withConfig({ protocol: ClientProtocol.Http });
+  console.log(`🧪 Mock registry started on ${MOCK_REGISTRY}`);
+});
+
+test.after.always(async () => {
+  mockClient.close();
+  await mockRegistry.stop();
+});
+
+test.serial('pullManifest - should pull manifest from mock registry', async (t) => {
+  const result = await mockClient.pullManifest(`${MOCK_REGISTRY}/test:latest`, anonymousAuth());
+
+  t.truthy(result);
+  t.truthy(result.manifest);
+  t.is(result.digest, MANIFEST_DIGEST);
+  t.is(result.manifest.manifestType, ManifestType.Image);
+  t.is(result.manifest.image!.schemaVersion, 2);
+});
+
+test.serial('pullManifest - should pull manifest by digest', async (t) => {
+  const result = await mockClient.pullManifest(
+    `${MOCK_REGISTRY}/test@${MANIFEST_DIGEST}`,
+    anonymousAuth(),
+  );
+
+  t.is(result.digest, MANIFEST_DIGEST);
+});
+
+test.serial(
+  'fetchManifestDigest - should fetch manifest digest without downloading full manifest',
+  async (t) => {
+    const digest = await mockClient.fetchManifestDigest(
+      `${MOCK_REGISTRY}/test:latest`,
+      anonymousAuth(),
+    );
+
+    t.is(digest, MANIFEST_DIGEST);
+  },
+);
+
+test.serial('listTags - should list tags from mock registry', async (t) => {
+  const tags = await mockClient.listTags(`${MOCK_REGISTRY}/test`, anonymousAuth(), 10, undefined);
+
+  t.true(tags.includes('latest'));
+  t.true(tags.includes('v1'));
+});
+
+test.serial('pullBlob - should pull config blob by digest', async (t) => {
+  const configData = await mockClient.pullBlob(`${MOCK_REGISTRY}/test:latest`, CONFIG_DIGEST);
+
+  t.true(configData instanceof Buffer);
+  t.true(configData.length > 0);
+
+  const configJson = JSON.parse(configData.toString('utf-8'));
+  t.is(configJson.architecture, 'amd64');
+  t.is(configJson.os, 'linux');
+});
+
+test.serial('pullBlob - should pull layer blob by digest', async (t) => {
+  const layerData = await mockClient.pullBlob(`${MOCK_REGISTRY}/test:latest`, BLOB_DIGEST);
+
+  t.true(layerData instanceof Buffer);
+  t.true(layerData.length > 0);
+});
+
+test.serial(
+  'pullBlobToFile - should pull config blob to a file with matching digest',
+  async (t) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'oci-client-pull-'));
+    t.teardown(() => rm(dir, { recursive: true, force: true }));
+    const dest = path.join(dir, 'config.json');
+
+    await mockClient.pullBlobToFile(`${MOCK_REGISTRY}/test:latest`, CONFIG_DIGEST, dest);
+
+    t.is(await sha256File(dest), CONFIG_DIGEST);
+  },
+);
+
+test.serial('pullBlobToFile - should pull layer blob to a file with matching digest', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'oci-client-pull-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const dest = path.join(dir, 'blob.tar.gz');
+
+  await mockClient.pullBlobToFile(`${MOCK_REGISTRY}/test:latest`, BLOB_DIGEST, dest);
+
+  t.is(await sha256File(dest), BLOB_DIGEST);
+});
+
+test.serial('pullBlobToFile - should throw for a non-existent blob', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'oci-client-pull-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const dest = path.join(dir, 'missing.bin');
+
+  await t.throwsAsync(
+    mockClient.pullBlobToFile(
+      `${MOCK_REGISTRY}/test:latest`,
+      'sha256:nonexistent0000000000000000000000000000000000000000000000000000',
+      dest,
+    ),
+  );
+});
+
+test.serial(
+  'pullBlobToFile - should throw IoError when the destination directory does not exist',
+  async (t) => {
+    const dest = path.join(os.tmpdir(), 'oci-client-missing-dir', 'nope', 'blob.bin');
+    const err = await t.throwsAsync(
+      mockClient.pullBlobToFile(`${MOCK_REGISTRY}/test:latest`, CONFIG_DIGEST, dest),
+    );
+
+    t.truthy(err);
+    const ociErr = fromOciError(err!);
+    t.is(ociErr.type, 'IoError');
+  },
+);
+
+test.serial(
+  'pushBlobFromFile - should throw IoError when the source file does not exist',
+  async (t) => {
+    const err = await t.throwsAsync(
+      mockClient.pushBlobFromFile(
+        `${MOCK_REGISTRY}/test:latest`,
+        path.join(os.tmpdir(), 'oci-client-no-such-file.bin'),
+        CONFIG_DIGEST,
+      ),
+    );
+
+    t.truthy(err);
+    const ociErr = fromOciError(err!);
+    t.is(ociErr.type, 'IoError');
+  },
+);
+
+test.serial('blobExists - should return true for existing blob', async (t) => {
+  const exists = await mockClient.blobExists(`${MOCK_REGISTRY}/test:latest`, CONFIG_DIGEST);
+  t.true(exists);
+});
+
+test.serial('blobExists - should return false for non-existing blob', async (t) => {
+  const fakeDigest = 'sha256:0000000000000000000000000000000000000000000000000000000000000000';
+  const exists = await mockClient.blobExists(`${MOCK_REGISTRY}/test:latest`, fakeDigest);
+  t.false(exists);
+});
+
+test.serial('pull - should pull full image with layers', async (t) => {
+  const imageData: ImageData = await mockClient.pull(
+    `${MOCK_REGISTRY}/test@${MANIFEST_DIGEST}`,
+    anonymousAuth(),
+    [IMAGE_DOCKER_LAYER_GZIP_MEDIA_TYPE],
+  );
+
+  t.truthy(imageData);
+  t.truthy(imageData.layers);
+  t.is(imageData.layers.length, 1);
+  t.truthy(imageData.config);
+  t.true(imageData.config.data instanceof Buffer);
+  t.truthy(imageData.digest);
+
+  t.truthy(imageData.manifest);
+  t.is(imageData.manifest!.schemaVersion, 2);
+  t.is(imageData.manifest!.layers!.length, imageData.layers.length);
+
+  t.true(imageData.layers[0].data.length > 0);
+});
+
+test.serial('pullManifestRaw - should pull raw manifest bytes', async (t) => {
+  const raw = await mockClient.pullManifestRaw(`${MOCK_REGISTRY}/test:latest`, anonymousAuth(), [
+    'application/vnd.docker.distribution.manifest.v2+json',
+  ]);
+
+  t.true(raw instanceof Buffer);
+  t.true(raw.length > 0);
+  const parsed = JSON.parse(raw.toString('utf-8'));
+  t.is(parsed.schemaVersion, 2);
+  t.truthy(parsed.config);
+  t.truthy(parsed.layers);
+});
+
+test.serial('pullReferrers - should return referrers as ImageIndex', async (t) => {
+  await mockClient.storeAuth(MOCK_REGISTRY, anonymousAuth());
+  const referrers = await mockClient.pullReferrers(`${MOCK_REGISTRY}/test@${MANIFEST_DIGEST}`);
+
+  t.truthy(referrers);
+  t.is(referrers.schemaVersion, 2);
+  t.true(Array.isArray(referrers.manifests));
+  t.is(referrers.manifests.length, 1);
+  t.is(referrers.manifests[0].artifactType, 'application/vnd.example.sbom.v1');
+  t.is(
+    referrers.manifests[0].digest,
+    'sha256:aaaa000000000000000000000000000000000000000000000000000000000000',
+  );
+});
+
+test.serial('Error Handling - should throw error for invalid image reference', (t) => {
+  t.throws(() => mockClient.pullManifest('invalid:::reference', anonymousAuth()));
+});
+
+test.serial('Error Handling - should throw error for non-existent blob', async (t) => {
+  await t.throwsAsync(
+    mockClient.pullBlob(
+      `${MOCK_REGISTRY}/test:latest`,
+      'sha256:nonexistent0000000000000000000000000000000000000000000000000000',
+    ),
+  );
+});
+
+test.serial('storeAuth - should store auth for later use', async (t) => {
+  const client = new OciClient();
+
+  await t.notThrowsAsync(client.storeAuth('docker.io', anonymousAuth()));
+  await t.notThrowsAsync(client.storeAuth('ghcr.io', basicAuth('user', 'token')));
+});
+
+// =============================================================================
+// Catalog Tests (Mock Registry)
+// =============================================================================
+
+test.serial('catalog - should list repositories from mock registry', async (t) => {
+  const repos = await mockClient.catalog(`${MOCK_REGISTRY}/test`, anonymousAuth());
+
+  t.true(Array.isArray(repos));
+  t.true(repos.length > 0);
+  t.true(repos.includes('test'));
+  t.true(repos.includes('test-multiarch'));
+});
+
+test.serial('catalog - should support pagination with n parameter', async (t) => {
+  const repos = await mockClient.catalog(`${MOCK_REGISTRY}/test`, anonymousAuth(), 2);
+
+  t.is(repos.length, 2);
+  t.is(repos[0], 'test');
+  t.is(repos[1], 'test-multiarch');
+});
+
+test.serial('catalog - should support pagination with n and last parameters', async (t) => {
+  const repos = await mockClient.catalog(
+    `${MOCK_REGISTRY}/test`,
+    anonymousAuth(),
+    2,
+    'test-multiarch',
+  );
+
+  t.is(repos.length, 2);
+  t.is(repos[0], 'library/alpine');
+  t.is(repos[1], 'library/nginx');
+});
+
+// =============================================================================
+// Multi-Platform Image Tests (Mock Registry)
+// =============================================================================
+
+test.serial(
+  'multiarch pullManifest - should return Image Index with platform entries',
+  async (t) => {
+    const result = await mockClient.pullManifest(
+      `${MOCK_REGISTRY}/test-multiarch:latest`,
+      anonymousAuth(),
+    );
+
+    t.truthy(result);
+    t.is(result.digest, IMAGE_INDEX_DIGEST);
+    t.is(result.manifest.manifestType, ManifestType.ImageIndex);
+    t.truthy(result.manifest.imageIndex);
+
+    const index = result.manifest.imageIndex!;
+    t.is(index.manifests.length, 2);
+
+    const amd64Entry = index.manifests.find((m) => m.platform?.architecture === 'amd64');
+    t.truthy(amd64Entry);
+    t.is(amd64Entry!.platform!.os, 'linux');
+    t.is(amd64Entry!.digest, AMD64_MANIFEST_DIGEST);
+
+    const arm64Entry = index.manifests.find((m) => m.platform?.architecture === 'arm64');
+    t.truthy(arm64Entry);
+    t.is(arm64Entry!.platform!.os, 'linux');
+    t.is(arm64Entry!.digest, ARM64_MANIFEST_DIGEST);
+  },
+);
+
+test.serial(
+  'multiarch pullImageManifest - should select linux/amd64 with platform filter',
+  async (t) => {
+    const client = OciClient.withConfig({
+      protocol: ClientProtocol.Http,
+      platform: { os: 'linux', architecture: 'amd64' },
+    });
+
+    const result = await client.pullImageManifest(
+      `${MOCK_REGISTRY}/test-multiarch:latest`,
+      anonymousAuth(),
+    );
+
+    t.truthy(result);
+    t.is(result.digest, AMD64_MANIFEST_DIGEST);
+    t.is(result.manifest.schemaVersion, 2);
+  },
+);
+
+test.serial(
+  'multiarch pullImageManifest - should select linux/arm64 with platform filter',
+  async (t) => {
+    const client = OciClient.withConfig({
+      protocol: ClientProtocol.Http,
+      platform: { os: 'linux', architecture: 'arm64' },
+    });
+
+    const result = await client.pullImageManifest(
+      `${MOCK_REGISTRY}/test-multiarch:latest`,
+      anonymousAuth(),
+    );
+
+    t.truthy(result);
+    t.is(result.digest, ARM64_MANIFEST_DIGEST);
+    t.is(result.manifest.schemaVersion, 2);
+  },
+);
+
+test.serial('multiarch pullImageManifest - should fail for non-existent platform', async (t) => {
+  const client = OciClient.withConfig({
+    protocol: ClientProtocol.Http,
+    platform: { os: 'freebsd', architecture: 's390x' },
+  });
+
+  const err = await t.throwsAsync(
+    client.pullImageManifest(`${MOCK_REGISTRY}/test-multiarch:latest`, anonymousAuth()),
+  );
+
+  t.truthy(err);
+  t.true(err!.message.includes('no entry found'));
+});
+
+test.serial(
+  'multiarch pullImageManifestAndListDigest - should return list digest for multi-arch image',
+  async (t) => {
+    const client = OciClient.withConfig({
+      protocol: ClientProtocol.Http,
+      platform: { os: 'linux', architecture: 'amd64' },
+    });
+
+    const result: PullImageManifestAndListDigestResult =
+      await client.pullImageManifestAndListDigest(
+        `${MOCK_REGISTRY}/test-multiarch:latest`,
+        anonymousAuth(),
+      );
+
+    t.truthy(result);
+    t.is(result.digest, AMD64_MANIFEST_DIGEST);
+    t.is(result.manifest.schemaVersion, 2);
+    t.truthy(result.listDigest);
+    t.is(result.listDigest, IMAGE_INDEX_DIGEST);
+  },
+);
+
+test.serial(
+  'pullImageManifestAndListDigest - should return null list digest for single-platform image',
+  async (t) => {
+    const result: PullImageManifestAndListDigestResult =
+      await mockClient.pullImageManifestAndListDigest(
+        `${MOCK_REGISTRY}/test:latest`,
+        anonymousAuth(),
+      );
+
+    t.truthy(result);
+    t.is(result.digest, MANIFEST_DIGEST);
+    t.is(result.manifest.schemaVersion, 2);
+    t.is(result.listDigest, undefined);
+  },
+);
+
+test.serial(
+  'multiarch pullManifestAndConfigAndListDigest - should return manifest, config and list digest',
+  async (t) => {
+    const client = OciClient.withConfig({
+      protocol: ClientProtocol.Http,
+      platform: { os: 'linux', architecture: 'amd64' },
+    });
+
+    const result: PullManifestAndConfigAndListDigestResult =
+      await client.pullManifestAndConfigAndListDigest(
+        `${MOCK_REGISTRY}/test-multiarch:latest`,
+        anonymousAuth(),
+      );
+
+    t.truthy(result);
+    t.is(result.digest, AMD64_MANIFEST_DIGEST);
+    t.is(result.manifest.schemaVersion, 2);
+    t.truthy(result.config);
+    const configJson = JSON.parse(result.config);
+    t.is(configJson.architecture, 'amd64');
+    t.is(configJson.os, 'linux');
+    t.truthy(result.listDigest);
+    t.is(result.listDigest, IMAGE_INDEX_DIGEST);
+  },
+);
+
+test.serial(
+  'multiarch pull - should pull full image with platform filter (linux/amd64)',
+  async (t) => {
+    const client = OciClient.withConfig({
+      protocol: ClientProtocol.Http,
+      platform: { os: 'linux', architecture: 'amd64' },
+    });
+
+    const imageData: ImageData = await client.pull(
+      `${MOCK_REGISTRY}/test-multiarch:latest`,
+      anonymousAuth(),
+      [IMAGE_LAYER_MEDIA_TYPE],
+    );
+
+    t.truthy(imageData);
+    t.truthy(imageData.layers);
+    t.is(imageData.layers.length, 1);
+    t.truthy(imageData.config);
+
+    const configJson = JSON.parse(imageData.config.data.toString('utf-8'));
+    t.is(configJson.architecture, 'amd64');
+    t.is(configJson.os, 'linux');
+  },
+);
+
+// =============================================================================
+// TLS Mock Registry Tests
+// =============================================================================
+
+let tlsRegistry: MockRegistry;
+let TLS_REGISTRY: string;
+let TLS_CA_CERT: Buffer;
+
+test.before(async () => {
+  tlsRegistry = new MockRegistry({ tls: true });
+  await tlsRegistry.start();
+  TLS_REGISTRY = tlsRegistry.address;
+  const tlsCerts = await generateTlsCerts();
+  TLS_CA_CERT = tlsCerts.caCert;
+  console.log(`🔒 TLS mock registry started on ${TLS_REGISTRY}`);
+});
+
+test.after.always(async () => {
+  await tlsRegistry.stop();
+});
+
+test.serial('TLS - should connect with extraRootCertificates', async (t) => {
+  const client = OciClient.withConfig({
+    protocol: ClientProtocol.Https,
+    extraRootCertificates: [
+      {
+        encoding: CertificateEncoding.Pem,
+        data: TLS_CA_CERT,
+      },
+    ],
+  });
+  const result = await client.pullManifest(`${TLS_REGISTRY}/test:latest`, anonymousAuth());
+  t.truthy(result.manifest);
+  t.is(result.digest, MANIFEST_DIGEST);
+  client.close();
+});
+
+test.serial('TLS - should connect with acceptInvalidCertificates', async (t) => {
+  const client = OciClient.withConfig({
+    protocol: ClientProtocol.Https,
+    acceptInvalidCertificates: true,
+  });
+  const result = await client.pullManifest(`${TLS_REGISTRY}/test:latest`, anonymousAuth());
+  t.truthy(result.manifest);
+  t.is(result.digest, MANIFEST_DIGEST);
+  client.close();
+});
+
+test.serial('TLS - should fail without CA cert (TLS is enforced)', async (t) => {
+  const client = OciClient.withConfig({
+    protocol: ClientProtocol.Https,
+  });
+  await t.throwsAsync(() => client.pullManifest(`${TLS_REGISTRY}/test:latest`, anonymousAuth()));
+  client.close();
+});
+
+test.serial('TLS - should connect with tlsCertsOnly', async (t) => {
+  const client = OciClient.withConfig({
+    protocol: ClientProtocol.Https,
+    tlsCertsOnly: [
+      {
+        encoding: CertificateEncoding.Pem,
+        data: TLS_CA_CERT,
+      },
+    ],
+  });
+  const result = await client.pullManifest(`${TLS_REGISTRY}/test:latest`, anonymousAuth());
+  t.truthy(result.manifest);
+  t.is(result.digest, MANIFEST_DIGEST);
+  client.close();
+});
+
+// =============================================================================
+// Push Tests with Zot Registry
+// =============================================================================
+
+const skipZot = shouldSkipZotTests();
+
+const zot = new ZotRegistry();
+let ZOT_REGISTRY: string;
+let ZOT_REPO: string;
+let zotClient: OciClient;
+
+if (!skipZot) {
+  test.before(async () => {
+    await zot.start();
+    ZOT_REGISTRY = zot.address;
+    ZOT_REPO = zot.repo('test-oci-client');
+    zotClient = zot.createClient();
+  });
+
+  test.after.always(async () => {
+    zotClient.close();
+    await zot.stop();
+  });
+}
+
+const zotTest = skipZot ? test.skip : test.serial;
+
+zotTest('pushBlob - should push a blob to the registry', async (t) => {
+  const testData = Buffer.from('Hello, OCI World!');
+  const hash = crypto.createHash('sha256').update(testData).digest('hex');
+  const digest = `sha256:${hash}`;
+
+  const result = await zotClient.pushBlob(`${ZOT_REPO}:test`, testData, digest);
+
+  t.truthy(result);
+  t.true(result.includes(digest));
+});
+
+zotTest('pushBlob - should verify pushed blob exists', async (t) => {
+  const testData = Buffer.from('Test blob data for existence check');
+  const hash = crypto.createHash('sha256').update(testData).digest('hex');
+  const digest = `sha256:${hash}`;
+
+  await zotClient.pushBlob(`${ZOT_REPO}:test`, testData, digest);
+
+  const exists = await zotClient.blobExists(`${ZOT_REPO}:test`, digest);
+  t.true(exists);
+});
+
+zotTest('pushBlob - should pull back the pushed blob with same content', async (t) => {
+  const originalData = Buffer.from('Roundtrip test data: ' + Date.now());
+  const hash = crypto.createHash('sha256').update(originalData).digest('hex');
+  const digest = `sha256:${hash}`;
+
+  await zotClient.pushBlob(`${ZOT_REPO}:test`, originalData, digest);
+
+  const pulledData = await zotClient.pullBlob(`${ZOT_REPO}:test`, digest);
+
+  t.true(pulledData instanceof Buffer);
+  t.is(pulledData.toString(), originalData.toString());
+  t.is(pulledData.length, originalData.length);
+});
+
+zotTest('pushBlobFromFile - should push a blob from a file', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'oci-client-push-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const src = path.join(dir, 'blob.bin');
+  await writeFile(src, `file-io push ${Date.now()}`);
+  const digest = await sha256File(src);
+
+  const result = await zotClient.pushBlobFromFile(`${ZOT_REPO}:file-io`, src, digest);
+
+  t.truthy(result);
+  t.true(result.includes(digest));
+
+  const exists = await zotClient.blobExists(`${ZOT_REPO}:file-io`, digest);
+  t.true(exists);
+});
+
+zotTest('pushBlobFromFile - should round-trip to a file with the same digest', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'oci-client-push-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const src = path.join(dir, 'src.bin');
+  const dest = path.join(dir, 'dest.bin');
+  await writeFile(src, `round-trip file blob ${Date.now()}`);
+  const digest = await sha256File(src);
+
+  await zotClient.pushBlobFromFile(`${ZOT_REPO}:file-io`, src, digest);
+  await zotClient.pullBlobToFile(`${ZOT_REPO}:file-io`, digest, dest);
+
+  t.is(await sha256File(dest), digest);
+  t.is(await sha256File(dest), await sha256File(src));
+});
+
+zotTest('mountBlob - should mount a blob from another repository', async (t) => {
+  const sourceRepo = zot.repo('test-mount-source');
+  const targetRepo = zot.repo('test-mount-target');
+  const blobData = Buffer.from('mount-blob-test-' + Date.now());
+  const hash = crypto.createHash('sha256').update(blobData).digest('hex');
+  const digest = `sha256:${hash}`;
+
+  await zotClient.pushBlob(`${sourceRepo}:latest`, blobData, digest);
+  t.true(await zotClient.blobExists(`${sourceRepo}:latest`, digest));
+
+  await zotClient.mountBlob(`${targetRepo}:latest`, `${sourceRepo}:latest`, digest);
+  t.true(await zotClient.blobExists(`${targetRepo}:latest`, digest));
+});
+
+zotTest('pushManifest - should push a simple OCI image manifest', async (t) => {
+  const configData = Buffer.from(
+    JSON.stringify({
+      architecture: 'amd64',
+      os: 'linux',
+      config: {},
+      rootfs: { type: 'layers', diff_ids: [] },
+    }),
+  );
+  const configHash = crypto.createHash('sha256').update(configData).digest('hex');
+  const configDigest = `sha256:${configHash}`;
+
+  const layerData = Buffer.from('test layer content');
+  const layerHash = crypto.createHash('sha256').update(layerData).digest('hex');
+  const layerDigest = `sha256:${layerHash}`;
+
+  await zotClient.pushBlob(`${ZOT_REPO}:v1`, configData, configDigest);
+  await zotClient.pushBlob(`${ZOT_REPO}:v1`, layerData, layerDigest);
+
+  const imageManifest: ImageManifest = {
+    schemaVersion: 2,
+    mediaType: OCI_IMAGE_MEDIA_TYPE,
+    config: {
+      mediaType: IMAGE_CONFIG_MEDIA_TYPE,
+      digest: configDigest,
+      size: configData.length,
+    },
+    layers: [
+      {
+        mediaType: IMAGE_LAYER_MEDIA_TYPE,
+        digest: layerDigest,
+        size: layerData.length,
+      },
+    ],
+  };
+
+  const manifest: Manifest = {
+    manifestType: ManifestType.Image,
+    image: imageManifest,
+  };
+
+  const manifestUrl = await zotClient.pushManifest(`${ZOT_REPO}:v1`, manifest);
+
+  t.truthy(manifestUrl);
+  t.true(manifestUrl.includes(ZOT_REGISTRY));
+});
+
+zotTest('push - should push a complete image using the push() method', async (t) => {
+  const tag = `full-${Date.now()}`;
+
+  const layer1Data = Buffer.from('Layer 1 content: ' + Date.now());
+  const layer2Data = Buffer.from('Layer 2 content: ' + Date.now());
+
+  const layers: ImageLayer[] = [
+    {
+      data: layer1Data,
+      mediaType: IMAGE_LAYER_MEDIA_TYPE,
+      annotations: { [ORG_OPENCONTAINERS_IMAGE_TITLE]: 'layer1.tar' },
+    },
+    {
+      data: layer2Data,
+      mediaType: IMAGE_LAYER_MEDIA_TYPE,
+      annotations: { [ORG_OPENCONTAINERS_IMAGE_TITLE]: 'layer2.tar' },
+    },
+  ];
+
+  const configJson = JSON.stringify({
+    architecture: 'amd64',
+    os: 'linux',
+    config: {
+      Env: ['PATH=/usr/local/bin:/usr/bin:/bin'],
+      Cmd: ['/bin/sh'],
+    },
+    rootfs: {
+      type: 'layers',
+      diff_ids: [],
+    },
+    history: [{ created: new Date().toISOString(), created_by: 'test' }],
+  });
+
+  const config: Config = {
+    data: Buffer.from(configJson),
+    mediaType: IMAGE_CONFIG_MEDIA_TYPE,
+  };
+
+  const response = await zotClient.push(
+    `${ZOT_REPO}:${tag}`,
+    layers,
+    config,
+    anonymousAuth(),
+    undefined,
+  );
+
+  t.truthy(response);
+  t.truthy(response.configUrl);
+  t.truthy(response.manifestUrl);
+  t.true(response.manifestUrl.includes(ZOT_REGISTRY));
+
+  const pulledResult = await zotClient.pullManifest(`${ZOT_REPO}:${tag}`, anonymousAuth());
+
+  t.is(pulledResult.manifest.manifestType, ManifestType.Image);
+  const pulledManifest = pulledResult.manifest.image!;
+  t.is(pulledManifest.layers!.length, 2);
+});
+
+// =============================================================================
+// Multi-Platform Tests with Zot Registry
+// =============================================================================
+
+zotTest('pushManifestList + pullManifest - should round-trip platform fields', async (t) => {
+  const ZOT_MULTIARCH = zot.repo('test-multiarch-roundtrip');
+  const { amd64Digest, arm64Digest } = await pushMultiarchImage(zotClient, ZOT_MULTIARCH);
+
+  const pulled = await zotClient.pullManifest(`${ZOT_MULTIARCH}:multiarch`, anonymousAuth());
+  t.is(pulled.manifest.manifestType, ManifestType.ImageIndex);
+  const pulledIndex = pulled.manifest.imageIndex!;
+  t.is(pulledIndex.manifests.length, 2);
+
+  const pulledAmd64 = pulledIndex.manifests.find((m) => m.digest === amd64Digest);
+  t.truthy(pulledAmd64);
+  t.is(pulledAmd64!.platform!.os, 'linux');
+  t.is(pulledAmd64!.platform!.architecture, 'amd64');
+
+  const pulledArm64 = pulledIndex.manifests.find((m) => m.digest === arm64Digest);
+  t.truthy(pulledArm64);
+  t.is(pulledArm64!.platform!.os, 'linux');
+  t.is(pulledArm64!.platform!.architecture, 'arm64');
+});
+
+zotTest(
+  'pullImageManifest - should select correct platform from multi-arch image via Zot',
+  async (t) => {
+    const ZOT_MULTIARCH = zot.repo('test-multiarch-filter');
+    const { amd64Digest } = await pushMultiarchImage(zotClient, ZOT_MULTIARCH);
+
+    const platformClient = OciClient.withConfig({
+      protocol: ClientProtocol.Http,
+      platform: { os: 'linux', architecture: 'amd64' },
+    });
+
+    const result = await platformClient.pullImageManifest(
+      `${ZOT_MULTIARCH}:multiarch`,
+      anonymousAuth(),
+    );
+
+    t.is(result.digest, amd64Digest);
+    t.is(result.manifest.schemaVersion, 2);
+  },
+);
+
+// =============================================================================
+// Structured Error Tests (fromOciError)
+// =============================================================================
+
+test.serial('fromOciError - should produce Generic for a plain Error without type', (t) => {
+  const err = new Error('some random error');
+  const ociErr = fromOciError(err);
+  t.is(ociErr.type, 'GenericError');
+  t.is(ociErr.message, 'some random error');
+});
+
+test.serial(
+  'fromOciError - should stamp type on async OCI error (connection refused)',
+  async (t) => {
+    const client = OciClient.withConfig({ protocol: ClientProtocol.Http });
+
+    const err = await t.throwsAsync(
+      client.pullManifest('127.0.0.1:1/test:latest', anonymousAuth()),
+    );
+
+    t.truthy(err);
+    const raw = err as any;
+    t.is(typeof raw.type, 'string', 'type should be stamped on the raw Error');
+    t.is(typeof raw.message, 'string', 'message should be present');
+    t.true(err instanceof Error, 'should be a proper Error instance');
+
+    const ociErr = fromOciError(err!);
+    t.is(ociErr.type, raw.type, 'fromOciError should read back the same type');
+    t.truthy(ociErr.message);
+  },
+);
+
+test.serial('fromOciError - should include cause chain for Request errors', async (t) => {
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http });
+
+  const err = await t.throwsAsync(client.pullManifest('127.0.0.1:1/test:latest', anonymousAuth()));
+
+  t.truthy(err);
+  t.truthy(err instanceof Error, 'should be a proper Error instance');
+  const ociErr = fromOciError(err!);
+  t.is(ociErr.type, 'RequestError');
+  t.is(
+    ociErr.message,
+    'error sending request for url (http://127.0.0.1:1/v2/test/manifests/latest)',
+  );
+  enhancedDeepEqual(t, ociErr.cause, {
+    type: 'hyper_util::client::legacy::Error',
+    message: 'client error (Connect)',
+    debug:
+      /^hyper_util::client::legacy::Error\(Connect, ConnectError\("tcp connect error", 127\.0\.0\.1:1, Os { code: \d+, kind: ConnectionRefused, message: "(Connection refused|No connection could be made.*)" }\)\)$/,
+    parsed: {
+      args: [
+        'Connect',
+        /^ConnectError\("tcp connect error", 127\.0\.0\.1:1, Os { code: \d+, kind: ConnectionRefused, message: "(Connection refused|No connection could be made.*)" }\)$/,
+      ],
+    },
+    cause: {
+      type: 'ConnectError',
+      message: 'tcp connect error',
+      debug:
+        /^ConnectError\("tcp connect error", 127\.0\.0\.1:1, Os { code: \d+, kind: ConnectionRefused, message: ".*" }\)$/,
+      parsed: {
+        args: [
+          'tcp connect error',
+          '127.0.0.1:1',
+          /^Os { code: \d+, kind: ConnectionRefused, message: ".*" }$/,
+        ],
+      },
+      cause: {
+        type: 'Os',
+        message: /(Connection refused|No connection could be made)/i,
+        debug: /^Os \{ code: \d+, kind: ConnectionRefused, message: ".*" }$/,
+        parsed: {
+          code: (val: unknown) =>
+            typeof val === 'number' && (val === 61 || val === 10061 || val === 111),
+          kind: 'ConnectionRefused',
+          message: /(Connection refused|No connection could be made)/i,
+        },
+      },
+    },
+  });
+});
+
+test.serial(
+  'fromOciError - should preserve error.type through fromOciError round-trip',
+  async (t) => {
+    const client = OciClient.withConfig({
+      protocol: ClientProtocol.Http,
+      platform: { os: 'freebsd', architecture: 's390x' },
+    });
+
+    const err = await t.throwsAsync(
+      client.pullImageManifest(`${MOCK_REGISTRY}/test-multiarch:latest`, anonymousAuth()),
+    );
+
+    t.truthy(err);
+    const raw = err as any;
+    t.is(typeof raw.type, 'string', 'type is stamped');
+
+    const ociErr = fromOciError(err!);
+    t.truthy(ociErr.message);
+    t.is(raw.type, ociErr.type, 'round-trip preserves type');
+  },
+);
+
+// =============================================================================
+// Structured Error Tests — extra fields on specific variants
+// =============================================================================
+
+test.serial('ServerError - should expose statusCode, url, and serverMessage', async (t) => {
+  const err = await t.throwsAsync(
+    mockClient.pullManifest(`${MOCK_REGISTRY}/error-server:latest`, anonymousAuth()),
+  );
+
+  t.truthy(err);
+  const raw = err as any;
+  const expectedUrl = `http://${MOCK_REGISTRY}/v2/error-server/manifests/latest`;
+  t.is(raw.type, 'ServerError');
+  t.is(raw.statusCode, 500);
+  t.is(raw.url, expectedUrl);
+  t.is(raw.serverMessage, 'Internal Server Error from mock');
+  t.true(err instanceof Error, 'should be a proper Error instance');
+
+  const ociErr = fromOciError(err!);
+  t.is(ociErr.type, 'ServerError');
+  if (ociErr.type === 'ServerError') {
+    t.is(ociErr.statusCode, 500);
+    t.is(ociErr.url, expectedUrl);
+    t.is(ociErr.serverMessage, 'Internal Server Error from mock');
+  }
+});
+
+test.serial('UnauthorizedError - should expose url', async (t) => {
+  const err = await t.throwsAsync(
+    mockClient.pullManifest(`${MOCK_REGISTRY}/error-unauthorized:latest`, anonymousAuth()),
+  );
+
+  t.truthy(err);
+  const raw = err as any;
+  const expectedUrl = `http://${MOCK_REGISTRY}/v2/error-unauthorized/manifests/latest`;
+  t.is(raw.type, 'UnauthorizedError');
+  t.is(raw.url, expectedUrl);
+  t.true(err instanceof Error, 'should be a proper Error instance');
+
+  const ociErr = fromOciError(err!);
+  t.is(ociErr.type, 'UnauthorizedError');
+  if (ociErr.type === 'UnauthorizedError') {
+    t.is(ociErr.url, expectedUrl);
+  }
+});
+
+test.serial('RegistryError - should expose url and errors array', async (t) => {
+  const err = await t.throwsAsync(
+    mockClient.pullManifest(`${MOCK_REGISTRY}/error-registry:latest`, anonymousAuth()),
+  );
+
+  t.truthy(err);
+  const raw = err as any;
+  const expectedUrl = `http://${MOCK_REGISTRY}/v2/error-registry/manifests/latest`;
+  t.is(raw.type, 'RegistryError');
+  t.is(raw.url, expectedUrl);
+  t.true(Array.isArray(raw.errors), 'errors should be an array');
+  t.is(raw.errors.length, 1);
+  t.is(raw.errors[0].code, OciErrorCode.ManifestUnknown);
+  t.is(raw.errors[0].message, 'manifest unknown to registry');
+  t.true(err instanceof Error, 'should be a proper Error instance');
+
+  const ociErr = fromOciError(err!);
+  t.is(ociErr.type, 'RegistryError');
+  if (ociErr.type === 'RegistryError') {
+    t.is(ociErr.url, expectedUrl);
+    t.is(ociErr.errors.length, 1);
+    t.is(ociErr.errors[0].code, OciErrorCode.ManifestUnknown);
+  }
+});
+
+test.serial('ImageManifestNotFoundError - should expose image field', async (t) => {
+  const client = OciClient.withConfig({
+    protocol: ClientProtocol.Http,
+    platform: { os: 'freebsd', architecture: 's390x' },
+  });
+
+  const err = await t.throwsAsync(
+    client.pullImageManifest(`${MOCK_REGISTRY}/test-multiarch:latest`, anonymousAuth()),
+  );
+
+  t.truthy(err);
+  const raw = err as any;
+  t.is(raw.type, 'ImageManifestNotFoundError');
+  t.is(typeof raw.image, 'string');
+  t.truthy(raw.image, 'image field should be non-empty');
+  t.true(err instanceof Error, 'should be a proper Error instance');
+
+  const ociErr = fromOciError(err!);
+  t.is(ociErr.type, 'ImageManifestNotFoundError');
+  if (ociErr.type === 'ImageManifestNotFoundError') {
+    t.is(ociErr.image, raw.image, 'fromOciError round-trip preserves image');
+  }
+});
+
+// =============================================================================
+// Digest Mismatch Tests (using badManifest/badConfig/badBlob MockConfig flags)
+// =============================================================================
+
+test.serial('digest mismatch - bad manifest digest should throw', async (t) => {
+  const badRegistry = new MockRegistry({ badManifest: true });
+  await badRegistry.start();
+  t.teardown(() => badRegistry.stop());
+
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http });
+  await t.throwsAsync(client.pullManifest(`${badRegistry.address}/test:latest`, anonymousAuth()), {
+    message: /digest/i,
+  });
+});
+
+test.serial('digest mismatch - bad config digest should throw on pull', async (t) => {
+  const badRegistry = new MockRegistry({ badConfig: true });
+  await badRegistry.start();
+  t.teardown(() => badRegistry.stop());
+
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http });
+  await t.throwsAsync(
+    client.pull(`${badRegistry.address}/test:latest`, anonymousAuth(), [
+      'application/vnd.docker.image.rootfs.diff.tar.gzip',
+    ]),
+  );
+});
+
+test.serial('digest mismatch - bad blob digest should throw on pull', async (t) => {
+  const badRegistry = new MockRegistry({ badBlob: true });
+  await badRegistry.start();
+  t.teardown(() => badRegistry.stop());
+
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http });
+  await t.throwsAsync(
+    client.pull(`${badRegistry.address}/test:latest`, anonymousAuth(), [
+      'application/vnd.docker.image.rootfs.diff.tar.gzip',
+    ]),
+  );
+});
+
+// =============================================================================
+// Auth Validation Tests
+// =============================================================================
+
+test('RegistryAuth - Basic without username should fail', (t) => {
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http });
+  const badAuth: RegistryAuth = { authType: RegistryAuthType.Basic } as RegistryAuth;
+  t.throws(() => client.pullManifest('127.0.0.1:1/test:latest', badAuth), {
+    message: /username required/i,
+  });
+});
+
+test('RegistryAuth - Bearer without token should fail', (t) => {
+  const client = OciClient.withConfig({ protocol: ClientProtocol.Http });
+  const badAuth: RegistryAuth = { authType: RegistryAuthType.Bearer } as RegistryAuth;
+  t.throws(() => client.pullManifest('127.0.0.1:1/test:latest', badAuth), {
+    message: /token required/i,
+  });
+});
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/**
+ * Projects `actual` down to the shape of `template`.
+ * If `template` contains RegExps or predicate functions, it evaluates them against `actual`
+ * and converts matching values into identical placeholders so `t.deepEqual` passes.
+ */
+function enhancedDeepEqual(t: ExecutionContext, actual: any, template: any): boolean {
+  function prepareComparable(actual: any, template: any): { actual: any; expected: any } {
+    // 1. RegExp matching
+    if (template instanceof RegExp) {
+      const isMatch = typeof actual === 'string' && template.test(actual);
+      const label = `<MATCH: ${template}>`;
+      return {
+        actual: isMatch ? label : actual,
+        expected: label,
+      };
+    }
+
+    // 2. Predicate function matching
+    if (typeof template === 'function') {
+      const isMatch = template(actual);
+      const label = `<PREDICATE_MATCH>`;
+      return {
+        actual: isMatch ? label : actual,
+        expected: label,
+      };
+    }
+
+    // 3. Array handling (only inspect indices present in template)
+    if (Array.isArray(template)) {
+      if (!Array.isArray(actual)) {
+        return { actual, expected: template };
+      }
+      const compActual: any[] = [];
+      const compExpected: any[] = [];
+      template.forEach((item, i) => {
+        const res = prepareComparable(actual[i], item);
+        compActual[i] = res.actual;
+        compExpected[i] = res.expected;
+      });
+      return { actual: compActual, expected: compExpected };
+    }
+
+    // 4. Object handling (only inspect keys present in template - like t.like)
+    if (template !== null && typeof template === 'object') {
+      if (actual === null || typeof actual !== 'object') {
+        return { actual, expected: template };
+      }
+      const compActual: Record<string, any> = {};
+      const compExpected: Record<string, any> = {};
+      for (const key of Object.keys(template)) {
+        const res = prepareComparable(actual[key], template[key]);
+        compActual[key] = res.actual;
+        compExpected[key] = res.expected;
+      }
+      return { actual: compActual, expected: compExpected };
+    }
+
+    // 5. Primitive equality
+    return { actual, expected: template };
+  }
+  const { actual: compActual, expected: compExpected } = prepareComparable(actual, template);
+  return t.deepEqual(compActual, compExpected);
+}
