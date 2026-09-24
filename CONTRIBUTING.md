@@ -22,6 +22,60 @@ maintainer has an open "Rejected" vote), the PR may be merged. While it is fine
 for non-maintainers to contribute their own code reviews, those reviews do not
 satisfy the above requirement.
 
+## Development Setup
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) (v22+)
+- [Rust](https://www.rust-lang.org/tools/install) (stable)
+- [Yarn](https://yarnpkg.com/) (v4, included via Corepack)
+- [`cargo-edit`](https://github.com/killercup/cargo-edit) — provides `cargo set-version`, used by the `bump` script:
+
+  ```bash
+  cargo install cargo-edit
+  ```
+
+### Building
+
+```bash
+yarn install
+yarn build        # release build
+yarn build:debug  # debug build
+```
+
+Both `build` and `build:debug` run a version consistency check before compiling.
+If the versions in `Cargo.toml`, `package.json`, and `testing/package.json` are
+out of sync, the build will fail with a clear message.
+
+### Version Management
+
+The package version in `Cargo.toml` is the single source of truth. Several files
+must stay in sync: `package.json`, `testing/package.json` (version and peer
+dependency), and `yarn.lock`.
+
+**Bumping the version:**
+
+```bash
+yarn bump <new-version>
+```
+
+For example: `yarn bump 0.18.0-alpha.1`. This command:
+
+1. Runs `cargo set-version <new-version>` to update `Cargo.toml`
+2. Runs `scripts/sync-version.js` to propagate the version to `package.json`
+   and `testing/package.json`
+3. Runs `yarn install` to refresh `yarn.lock`
+
+After bumping, also run `cargo generate-lockfile` if `Cargo.lock` is committed.
+
+**Checking version consistency (without modifying files):**
+
+```bash
+node scripts/sync-version.js --check
+```
+
+This is what the CI and the build scripts run to ensure all versions are aligned.
+
 ## Code of Conduct
 
 This project has adopted the [CNCF Code of

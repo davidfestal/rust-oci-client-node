@@ -260,6 +260,20 @@ export class MockRegistry {
         res.end(JSON.stringify(envelope));
         return;
       }
+      if (url.startsWith('/v2/error-registry-other/')) {
+        const envelope = {
+          errors: [
+            {
+              code: 'ARTIFACT_LOCKED',
+              message: 'artifact is locked by another process',
+              detail: { Reason: 'concurrent_push' },
+            },
+          ],
+        };
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(envelope));
+        return;
+      }
 
       // /v2/{name}/manifests/{ref}
       if (url.includes('/manifests/')) {

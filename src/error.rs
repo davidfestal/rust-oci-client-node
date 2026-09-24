@@ -17,6 +17,10 @@ use oci_client::ParseError as NativeParseError;
 // OCI Error Code (OCI Distribution Spec)
 // ============================================================================
 
+/// Known OCI Distribution Spec error codes.
+///
+/// Unknown registry codes are not represented here — they appear as plain
+/// strings on `OciRegistryError.code`.
 #[napi(string_enum)]
 #[derive(Serialize, Deserialize)]
 pub enum OciErrorCode {
@@ -39,27 +43,31 @@ pub enum OciErrorCode {
     Toomanyrequests,
 }
 
-impl From<&NativeOciErrorCode> for OciErrorCode {
-    fn from(code: &NativeOciErrorCode) -> Self {
-        match code {
-            NativeOciErrorCode::BlobUnknown => Self::BlobUnknown,
-            NativeOciErrorCode::BlobUploadInvalid => Self::BlobUploadInvalid,
-            NativeOciErrorCode::BlobUploadUnknown => Self::BlobUploadUnknown,
-            NativeOciErrorCode::DigestInvalid => Self::DigestInvalid,
-            NativeOciErrorCode::ManifestBlobUnknown => Self::ManifestBlobUnknown,
-            NativeOciErrorCode::ManifestInvalid => Self::ManifestInvalid,
-            NativeOciErrorCode::ManifestUnknown => Self::ManifestUnknown,
-            NativeOciErrorCode::ManifestUnverified => Self::ManifestUnverified,
-            NativeOciErrorCode::NameInvalid => Self::NameInvalid,
-            NativeOciErrorCode::NameUnknown => Self::NameUnknown,
-            NativeOciErrorCode::NotFound => Self::NotFound,
-            NativeOciErrorCode::SizeInvalid => Self::SizeInvalid,
-            NativeOciErrorCode::TagInvalid => Self::TagInvalid,
-            NativeOciErrorCode::Unauthorized => Self::Unauthorized,
-            NativeOciErrorCode::Denied => Self::Denied,
-            NativeOciErrorCode::Unsupported => Self::Unsupported,
-            NativeOciErrorCode::Toomanyrequests => Self::Toomanyrequests,
-        }
+/// Convert a native error code to the JS string value.
+///
+/// Known codes use the same PascalCase literals as the `#[napi(string_enum)]`
+/// (e.g. `"ManifestUnknown"`). Unknown codes (`Other`) pass through the raw
+/// registry string (typically SCREAMING_SNAKE_CASE).
+fn error_code_to_js(code: &NativeOciErrorCode) -> String {
+    match code {
+        NativeOciErrorCode::BlobUnknown => "BlobUnknown".into(),
+        NativeOciErrorCode::BlobUploadInvalid => "BlobUploadInvalid".into(),
+        NativeOciErrorCode::BlobUploadUnknown => "BlobUploadUnknown".into(),
+        NativeOciErrorCode::DigestInvalid => "DigestInvalid".into(),
+        NativeOciErrorCode::ManifestBlobUnknown => "ManifestBlobUnknown".into(),
+        NativeOciErrorCode::ManifestInvalid => "ManifestInvalid".into(),
+        NativeOciErrorCode::ManifestUnknown => "ManifestUnknown".into(),
+        NativeOciErrorCode::ManifestUnverified => "ManifestUnverified".into(),
+        NativeOciErrorCode::NameInvalid => "NameInvalid".into(),
+        NativeOciErrorCode::NameUnknown => "NameUnknown".into(),
+        NativeOciErrorCode::NotFound => "NotFound".into(),
+        NativeOciErrorCode::SizeInvalid => "SizeInvalid".into(),
+        NativeOciErrorCode::TagInvalid => "TagInvalid".into(),
+        NativeOciErrorCode::Unauthorized => "Unauthorized".into(),
+        NativeOciErrorCode::Denied => "Denied".into(),
+        NativeOciErrorCode::Unsupported => "Unsupported".into(),
+        NativeOciErrorCode::Toomanyrequests => "Toomanyrequests".into(),
+        NativeOciErrorCode::Other(code) => code.clone(),
     }
 }
 
@@ -70,7 +78,12 @@ impl From<&NativeOciErrorCode> for OciErrorCode {
 #[napi(object)]
 #[derive(Serialize, Deserialize)]
 pub struct OciRegistryError {
-    pub code: OciErrorCode,
+    /// Known codes are the `OciErrorCode` string values; unknown registry
+    /// codes are arbitrary strings. Uses `` `${OciErrorCode}` | (string & {}) ``
+    /// so TypeScript expands the enum to a string-literal union (for
+    /// autocomplete) without collapsing to plain `string`.
+    #[napi(ts_type = "`${OciErrorCode}` | (string & {})")]
+    pub code: String,
     pub message: String,
     pub detail: String,
 }
@@ -80,7 +93,7 @@ fn convert_envelope(envelope: &OciEnvelope) -> Vec<OciRegistryError> {
         .errors
         .iter()
         .map(|e| OciRegistryError {
-            code: OciErrorCode::from(&e.code),
+            code: error_code_to_js(&e.code),
             message: e.message.clone(),
             detail: serde_json::to_string(&e.detail).unwrap_or_default(),
         })

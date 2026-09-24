@@ -1177,10 +1177,16 @@ impl OciClient {
             &env,
             async move {
                 Ok(match tokio::fs::File::open(&path).await {
-                    Ok(file) => {
-                        let stream = ReaderStream::new(file).map_err(OciDistributionError::from);
-                        client.push_blob_stream(&reference, stream, &digest).await
-                    }
+                    Ok(file) => match file.metadata().await {
+                        Ok(metadata) => {
+                            let stream =
+                                ReaderStream::new(file).map_err(OciDistributionError::from);
+                            client
+                                .push_blob_stream(&reference, stream, &digest, Some(metadata.len()))
+                                .await
+                        }
+                        Err(err) => Err(err.into()),
+                    },
                     Err(err) => Err(err.into()),
                 })
             },

@@ -1093,10 +1093,11 @@ __metadata:
   resolution: "@oras-project/oci-client-testing@workspace:testing"
   dependencies:
     "@oras-project/oci-client": "workspace:*"
+    "@types/node": "npm:^22.0.0"
     selfsigned: "npm:^5.5.0"
     typescript: "npm:^5.9.2"
   peerDependencies:
-    "@oras-project/oci-client": ">=0.17.0"
+    "@oras-project/oci-client": 0.18.0-alpha.0
   languageName: unknown
   linkType: soft
 
@@ -1758,6 +1759,15 @@ __metadata:
   dependencies:
     undici-types: "npm:~6.21.0"
   checksum: 10c0/68e7d92dd2b7bddff9dffabb9c740e655906ceac428dcf070915cdcae720579e4d72261c55ed7eccbfa907a75cbb1ff3a9148ea49878a07a72d5dd6c9e06d9d7
+  languageName: node
+  linkType: hard
+
+"@types/node@npm:^22.0.0":
+  version: 22.20.4
+  resolution: "@types/node@npm:22.20.4"
+  dependencies:
+    undici-types: "npm:~6.21.0"
+  checksum: 10c0/3a17e19f7b7b7a6d6c695ef8b0a34b70f84829a1539f57d338487bc3b51ddd4ca86ffbcbcc4f1307a41de83d02c1b7dfbb16e8cb6a9c3a8360b4306ccf9ead2d
   languageName: node
   linkType: hard
 
