@@ -18,9 +18,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag override (e.g. v0.18.0 or v0.18.0-rc.1)'
+        description: 'Release tag (e.g. v0.18.0 or v0.18.0-rc.1)'
         type: string
-        required: false
+        required: true
       dry_run:
         description: 'Dry run (simulate publish without modifying npm)'
         type: boolean
@@ -51,7 +51,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 24
           registry-url: 'https://registry.npmjs.org'
 
       - name: Verify version consistency
@@ -90,7 +90,24 @@ jobs:
           PKG_NAME=$(jq -r .name package.json)
           VERSION=$(jq -r .version package.json)
 
-          NPM_LATEST=$(npm view "$PKG_NAME" dist-tags.latest 2>/dev/null || echo "")
+          # Fail closed on registry errors; only treat a verified 404 as "no latest".
+          NPM_VIEW_ERR_FILE=$(mktemp)
+          set +e
+          NPM_LATEST=$(npm view "$PKG_NAME" dist-tags.latest 2>"$NPM_VIEW_ERR_FILE")
+          NPM_VIEW_EXIT=$?
+          set -e
+          NPM_VIEW_ERR=$(<"$NPM_VIEW_ERR_FILE")
+          rm -f "$NPM_VIEW_ERR_FILE"
+          if [[ $NPM_VIEW_EXIT -eq 0 ]]; then
+            :
+          elif echo "$NPM_VIEW_ERR" | grep -qiE 'E404|404 Not Found|not in this registry'; then
+            echo "Package not yet on npm; treating as first release"
+            NPM_LATEST=""
+          else
+            echo "::error::Failed to query npm for ${PKG_NAME} dist-tags.latest:"
+            echo "$NPM_VIEW_ERR"
+            exit 1
+          fi
 
           # Strip prerelease/build metadata (%%[-+]* only strips trailing +/- chars)
           if [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+) ]]; then
@@ -107,27 +124,31 @@ jobs:
             IS_BACKPORT="true"
           fi
 
-          SYNC_NEXT_TAG=""
-
           if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             # --- STABLE RELEASES ---
-            IS_PRERELEASE="false"
+            # One tag per publish (OIDC-friendly; no post-publish dist-tag sync).
             if [[ "$IS_BACKPORT" == "true" ]]; then
-              DIST_TAG="v${MAJOR}.${MINOR}"
-              SYNC_NEXT_TAG="v${MAJOR}.${MINOR}-next"
+              # Dots → hyphens so tags are not SemVer ranges (e.g. "v0.17").
+              DIST_TAG="v${MAJOR}-${MINOR}-latest"
             else
               DIST_TAG="latest"
-              SYNC_NEXT_TAG="next"
             fi
 
           elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-([a-zA-Z0-9]+) ]]; then
             # --- PRERELEASES ---
             # Dist-tag is the leading prerelease id (e.g. 0.18.0-rc.1 → "rc")
-            IS_PRERELEASE="true"
             PRE_IDENTIFIER="${BASH_REMATCH[1]}"
+            # Reject reserved channels and SemVer-like ids (npm would refuse the tag).
+            if [[ "${PRE_IDENTIFIER,,}" =~ ^(latest|next)$ ]] \
+              || [[ "$PRE_IDENTIFIER" =~ ^[0-9] ]] \
+              || [[ "$PRE_IDENTIFIER" =~ ^[vV][0-9] ]] \
+              || [[ "$PRE_IDENTIFIER" =~ ^[xX*]$ ]]; then
+              echo "::error::Prerelease id '$PRE_IDENTIFIER' cannot be used as an npm dist-tag; use rc/alpha/beta/..."
+              exit 1
+            fi
 
             if [[ "$IS_BACKPORT" == "true" ]]; then
-              DIST_TAG="v${MAJOR}.${MINOR}-${PRE_IDENTIFIER}"
+              DIST_TAG="v${MAJOR}-${MINOR}-${PRE_IDENTIFIER}"
             else
               DIST_TAG="${PRE_IDENTIFIER}"
             fi
@@ -144,9 +165,7 @@ jobs:
 
           echo "Target publish version $VERSION under dist-tag '$DIST_TAG'"
           echo "should_publish=true" >> "$GITHUB_OUTPUT"
-          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
-          echo "sync_next_tag=$SYNC_NEXT_TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "is_dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"
 
@@ -161,17 +180,6 @@ jobs:
         run: |
           npm publish
 
-      - name: Sync 'next' tag for main package
-        if: steps.tag.outputs.should_publish == 'true' && steps.tag.outputs.is_prerelease == 'false' && steps.tag.outputs.is_dry_run == 'false'
-        env:
-          VERSION: ${{ steps.tag.outputs.version }}
-          SYNC_TAG: ${{ steps.tag.outputs.sync_next_tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          PKG_NAME=$(jq -r .name package.json)
-          echo "Promoting '${SYNC_TAG}' tag to stable version ${VERSION}..."
-          npm dist-tag add "${PKG_NAME}@${VERSION}" "${SYNC_TAG}" || true
-
       - name: Build testing package
         if: steps.tag.outputs.should_publish == 'true' && steps.tag.outputs.is_dry_run == 'false'
         run: cd testing && yarn build
@@ -183,17 +191,6 @@ jobs:
         run: |
           cd testing
           npm publish
-
-      - name: Sync 'next' tag for testing package
-        if: steps.tag.outputs.should_publish == 'true' && steps.tag.outputs.is_prerelease == 'false' && steps.tag.outputs.is_dry_run == 'false'
-        env:
-          VERSION: ${{ steps.tag.outputs.version }}
-          SYNC_TAG: ${{ steps.tag.outputs.sync_next_tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          PKG_NAME=$(jq -r .name testing/package.json)
-          echo "Promoting '${SYNC_TAG}' tag for testing package to stable version ${VERSION}..."
-          npm dist-tag add "${PKG_NAME}@${VERSION}" "${SYNC_TAG}" || true
 
   build-and-test-nodejs:
     name: Build & Test Node.js
