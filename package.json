@@ -1,6 +1,6 @@
 {
   "name": "@oras-project/oci-client",
-  "version": "0.17.0",
+  "version": "0.18.0-alpha.0",
   "description": "Node.js bindings for rust-oci-client - OCI Distribution client",
   "keywords": [
     "bindings",
@@ -37,15 +37,16 @@
   },
   "scripts": {
     "artifacts": "napi artifacts",
-    "build": "yarn sync-version && napi build --platform --release && yarn fix-const-enums",
-    "build:debug": "yarn sync-version && napi build --platform && yarn fix-const-enums",
+    "build": "yarn sync-version --check && napi build --platform --release && yarn fix-const-enums",
+    "build:debug": "yarn sync-version --check && napi build --platform && yarn fix-const-enums",
     "fix-const-enums": "node scripts/fix-const-enums.js",
     "format": "oxfmt . && cargo fmt --all",
     "lint": "oxlint .",
     "prepublishOnly": "napi prepublish -t npm --no-gh-release",
     "test": "ava",
     "version": "napi version",
-    "sync-version": "node scripts/sync-version.js"
+    "sync-version": "node scripts/sync-version.js",
+    "bump": "cargo set-version \"$@\" && node scripts/sync-version.js && yarn install"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.10.4",

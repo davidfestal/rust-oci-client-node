@@ -1001,6 +1001,28 @@ zotTest('pushBlobFromFile - should round-trip to a file with the same digest', a
   t.is(await sha256File(dest), await sha256File(src));
 });
 
+zotTest('pushBlobFromFile - should push with useMonolithicPush', async (t) => {
+  const client = OciClient.withConfig({
+    protocol: ClientProtocol.Http,
+    useMonolithicPush: true,
+  });
+  t.teardown(() => client.close());
+
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'oci-client-push-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const src = path.join(dir, 'blob.bin');
+  await writeFile(src, `monolithic file-io push ${Date.now()}`);
+  const digest = await sha256File(src);
+
+  const result = await client.pushBlobFromFile(`${ZOT_REPO}:file-io`, src, digest);
+
+  t.truthy(result);
+  t.true(result.includes(digest));
+
+  const exists = await client.blobExists(`${ZOT_REPO}:file-io`, digest);
+  t.true(exists);
+});
+
 zotTest('mountBlob - should mount a blob from another repository', async (t) => {
   const sourceRepo = zot.repo('test-mount-source');
   const targetRepo = zot.repo('test-mount-target');
@@ -1338,6 +1360,26 @@ test.serial('RegistryError - should expose url and errors array', async (t) => {
     t.is(ociErr.url, expectedUrl);
     t.is(ociErr.errors.length, 1);
     t.is(ociErr.errors[0].code, OciErrorCode.ManifestUnknown);
+  }
+});
+
+test.serial('RegistryError - unknown code should be a plain string', async (t) => {
+  const err = await t.throwsAsync(
+    mockClient.pullManifest(`${MOCK_REGISTRY}/error-registry-other:latest`, anonymousAuth()),
+  );
+
+  t.truthy(err);
+  const raw = err as any;
+  t.is(raw.type, 'RegistryError');
+  t.is(raw.errors.length, 1);
+  t.is(typeof raw.errors[0].code, 'string');
+  t.is(raw.errors[0].code, 'ARTIFACT_LOCKED');
+  t.is(raw.errors[0].message, 'artifact is locked by another process');
+
+  const ociErr = fromOciError(err!);
+  t.is(ociErr.type, 'RegistryError');
+  if (ociErr.type === 'RegistryError') {
+    t.is(ociErr.errors[0].code, 'ARTIFACT_LOCKED');
   }
 });
 
