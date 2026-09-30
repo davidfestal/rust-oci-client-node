@@ -1097,7 +1097,7 @@ __metadata:
     selfsigned: "npm:^5.5.0"
     typescript: "npm:^5.9.2"
   peerDependencies:
-    "@oras-project/oci-client": 0.18.0-alpha.0
+    "@oras-project/oci-client": 0.18.0-alpha.1
   languageName: unknown
   linkType: soft
 
