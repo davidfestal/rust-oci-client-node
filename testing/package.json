@@ -1,6 +1,6 @@
 {
   "name": "@oras-project/oci-client-testing",
-  "version": "0.18.0-alpha.0",
+  "version": "0.18.0-alpha.1",
   "description": "Test utilities for @oras-project/oci-client — MockRegistry (in-process) and ZotRegistry (container-based)",
   "license": "Apache-2.0",
   "author": "The ORAS Authors",
@@ -37,6 +37,6 @@
     "typescript": "^5.9.2"
   },
   "peerDependencies": {
-    "@oras-project/oci-client": "0.18.0-alpha.0"
+    "@oras-project/oci-client": "0.18.0-alpha.1"
   }
 }
